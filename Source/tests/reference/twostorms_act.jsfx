@@ -1,0 +1,2645 @@
+desc:TwoStorms Act
+tags: utility gain metering calibration transient dynamics
+author: TwoStorms
+version: 1.0
+//
+// A gain stage to drop after any plug-in. Default: one linked stereo pair (one
+// fader); up to 8 channels, pairs can be unlinked and single channels switched
+// off. Output meters, Auto in three modes (Target: the output hits Target; Match: it
+// equals the previous Act's output; Reference: it equals the reference chosen in the
+// Gain Stage's toolbar), Drive link (when this Act's gain changes,
+// another Act or a plug-in parameter moves the opposite way; engage switch). The last Act in a
+// chain is its finale (listed on the Gain Stage's Finales tab); its Finale setting can say Always
+// or Never instead. An optional transient shaper (1 to 3 bands, attack and sustain per band, optional lookahead,
+// before the gain) is off by default and costs nothing while off. TwoStorms Gain Stage lists and
+// remote-controls every Act; settings live here, in each Act. Zero latency.
+// Needs REAPER 6.74 or newer. The helper script (twostorms_helper.lua) supplies
+// plug-in and track names, the exact chain order and plug-in parameter links.
+
+slider1:0<0,3,1{2,4,6,8}>-Channels
+slider2:0<0,2,1{Auto,Always,Never}>-Finale (Auto = the last Act in the chain)
+slider3:0<0,2,1{Peak,RMS,LUFS}>-Auto measure
+slider4:-12<-60,0,0.01>-Auto target
+slider5:4<0,7,1{Manual,1 s,2 s,3 s,5 s,10 s,20 s,30 s}>-Auto time
+slider6:1<0,1,1{Off,On}>-Link 1-2
+slider7:1<0,1,1{Off,On}>-Link 3-4
+slider8:1<0,1,1{Off,On}>-Link 5-6
+slider9:1<0,1,1{Off,On}>-Link 7-8
+slider10:0<-100,60,0.01>-Ch1 gain (dB, -100 = -inf)
+slider11:0<-100,60,0.01>-Ch2 gain (dB, -100 = -inf)
+slider12:0<-100,60,0.01>-Ch3 gain (dB, -100 = -inf)
+slider13:0<-100,60,0.01>-Ch4 gain (dB, -100 = -inf)
+slider14:0<-100,60,0.01>-Ch5 gain (dB, -100 = -inf)
+slider15:0<-100,60,0.01>-Ch6 gain (dB, -100 = -inf)
+slider16:0<-100,60,0.01>-Ch7 gain (dB, -100 = -inf)
+slider17:0<-100,60,0.01>-Ch8 gain (dB, -100 = -inf)
+slider18:1<0,1,1{Off,On}>-Ch1 used
+slider19:1<0,1,1{Off,On}>-Ch2 used
+slider20:1<0,1,1{Off,On}>-Ch3 used
+slider21:1<0,1,1{Off,On}>-Ch4 used
+slider22:1<0,1,1{Off,On}>-Ch5 used
+slider23:1<0,1,1{Off,On}>-Ch6 used
+slider24:1<0,1,1{Off,On}>-Ch7 used
+slider25:1<0,1,1{Off,On}>-Ch8 used
+slider26:0<0,14,1>-Ch1 match source
+slider27:0<0,14,1>-Ch2 match source
+slider28:0<0,14,1>-Ch3 match source
+slider29:0<0,14,1>-Ch4 match source
+slider30:0<0,14,1>-Ch5 match source
+slider31:0<0,14,1>-Ch6 match source
+slider32:0<0,14,1>-Ch7 match source
+slider33:0<0,14,1>-Ch8 match source
+slider34:0<0,999999,1>-Drive link target ID
+slider35:0<0,999999,1>-Reference ID
+slider36:0<0,999999,1>-Instance ID
+slider37:3<0,5,1{Off,1 s,2 s,5 s,10 s,Infinite}>-Peak hold
+slider38:3<0,5,1{24 dB,36 dB,48 dB,60 dB,72 dB,96 dB}>-Meter range
+slider39:1<0,1,1{Off,On}>-Drive link engaged
+slider40:0<0,2,1{Target,Match,Reference}>-Auto mode
+slider41:-200<-200,60,0.01>-Level the last Match/Reference aimed for (-200 = none)
+slider42:1<0,5,1{100%,115%,130%,150%,175%,200%}>-Window zoom
+slider43:0<0,1,1{Off,On}>-Transient shaper
+slider44:0<-100,100,0.1>-Transient shaper: low attack (%)
+slider45:0<-100,100,0.1>-Transient shaper: low sustain (%)
+slider46:0<-100,100,0.1>-Transient shaper: mid attack (%)
+slider47:0<-100,100,0.1>-Transient shaper: mid sustain (%)
+slider48:0<-100,100,0.1>-Transient shaper: high attack (%)
+slider49:0<-100,100,0.1>-Transient shaper: high sustain (%)
+slider50:200<20,20000,1>-Transient shaper: crossover 1 (Hz)
+slider51:2500<20,20000,1>-Transient shaper: crossover 2 (Hz)
+slider52:0<0,1,1>-Unused
+slider53:0<0,1,1{Off,On}>-Transient shaper: crossover 1 used
+slider54:0<0,1,1{Off,On}>-Transient shaper: crossover 2 used
+slider55:0<0,1,1{Off,On}>-Transient shaper: lookahead
+slider56:2<0.1,10,0.01>-Transient shaper: lookahead time (ms)
+in_pin:In 1
+in_pin:In 2
+in_pin:In 3
+in_pin:In 4
+in_pin:In 5
+in_pin:In 6
+in_pin:In 7
+in_pin:In 8
+out_pin:Out 1
+out_pin:Out 2
+out_pin:Out 3
+out_pin:Out 4
+out_pin:Out 5
+out_pin:Out 6
+out_pin:Out 7
+out_pin:Out 8
+options:gmem=TwoStormsGS
+
+@init
+KIND = 1; SUBKIND = 0;
+// NOTE: @sample/@block (audio thread) and @gfx (UI thread) run at the same time
+// and share every global. Audio temporaries start with a_, UI temporaries with
+// g_, @slider temporaries with s_. Functions that both threads need exist twice
+// (a_ and g_ copies), because EEL2 function locals are shared between callers.
+// EEL2 names are case-insensitive, so no local reuses a global array name.
+ext_noinit = 1;
+ext_nodenorm = 1;
+gfx_ext_retina = 1;
+
+GFLOOR = -100;          // gain floor = -inf
+MAXB = 6000;            // auto bins: 6000 x 10 ms = 60 s
+
+// ---- shared memory (gmem "TwoStormsGS"); the helper script uses the same numbers ----
+GM_MAGIC = 0; GM_SLOTVER = 1; GM_SCRIPTBEAT = 2; GM_SCRIPTVER = 3; GM_MAXSLOT = 5;
+GM_ZOOM = 6; GM_ZOOMV = 7;      // window zoom shared by every TwoStorms window, and a change counter
+SCRIPT_NEED = 6;        // helper script version these plug-ins need (6: user presets, the IR Loader's browsing)
+MAGIC = 7531;
+SLOTBASE = 1024; SLOTSZ = 256; NSLOT = 1024;
+NAMEBASE = 263168; NAMESZ = 192;          // NAMEBASE = SLOTBASE + NSLOT * SLOTSZ
+// slot fields (written by the slot's owner unless noted)
+O_OWNER = 0; O_NONCE = 1; O_HEART = 2; O_KIND = 3; O_TRACK = 4; O_POS = 5; O_PFLAGS = 6; O_ORDER = 7;
+O_ASTATE = 8; O_AMODE = 10; O_RUNID = 11; O_DONET = 12; O_RESULT = 13; O_RESSEQ = 14;
+O_BLKSEQ = 15; O_KACT = 16;
+O_KREQ = 17;            // written by the next point while it matches against this one
+O_ON = 18; O_HBC = 19; O_LIMIT = 21; O_BLKLEN = 22; O_ATIME = 23; O_ADUR = 24;
+O_SUBKIND = 25;         // 0 = TwoStorms Act, 1.. = the Act built into a TwoStorms plug-in (titled with its own name)
+O_DLEARN = 26;          // written by UIs: bumped to ask the helper script to learn a drive-link parameter
+// audio key: a plug-in writes its output samples for a later plug-in on the same track (a TwoStorms Gate keying from
+// it), only while one asks. Slot fields 27..31 and gmem 460800..4718591 are the audio key's and nothing else's.
+O_AREQ = 27;            // written by the plug-in that wants the audio: counts up once per block it runs
+O_ALANE = 28;           // written by the plug-in that owns the audio: its lane + 1 (0 = not writing, -1 = its lane is taken)
+O_ASEQ = 29;            // counts the blocks it has written
+O_ASTART = 30;          // ring position where its latest block starts
+O_ALEN = 31;            // length of that block
+AUD_LANES = 64; AUD_R = 32768; AUD_MASK = 32767; AUD_LANESZ = 65536;   // a lane = two rings of AUD_R samples (left, right)
+AUD_HDR = 460800; AUD_HSZ = 4; AUD_BASE = 524288;    // lane headers (owner slot + 1, owner ID, last write time), then the lanes
+O_PKD = 32; O_PKH = 40; O_RMS = 48; O_RMH = 56; O_BPK = 64; O_BEN = 72; O_BKE = 80; O_RLVL = 88; O_CLIP = 96;
+O_RING_W = 104;         // written by UIs (all UIs run on REAPER's main thread)
+O_RING_R = 105;         // written by the owner
+O_RING = 108; RINGN = 16;
+O_DRVS = 224;           // per channel: how much of the gain came from drive links (those moves are not passed on)
+O_P = 176;              // published parameters: O_P + p
+// name records (written by the helper script)
+N_ID = 0; N_ORDER = 1; N_FLAGS = 3; N_PREV = 8; N_PREVLEN = 55; N_TNAME = 64; N_TNAMELEN = 63;
+N_DSTAT = 4; N_DNAME = 128; N_DNAMELEN = 63;   // drive-link parameter: 1 linked, 2 learning, 3 not found, 4 not in dB
+// N_FLAGS bits: 1 in a project, 2 enabled, 4 offline, 8 this track feeds the reference's track (sends/folders),
+// 16 an enabled plug-in comes after this one in its chain
+NF_REFFED = 8; NF_TAIL = 16;
+DRIVE_PARAM = 1;        // drive link value meaning "a plug-in parameter" (Act IDs are 100000 and up)
+// Drive link: when this Act's gain changes (by hand, Auto, Match or automation), its target moves
+// the opposite way. The target is another Act (which watches this one on the audio thread) or a
+// plug-in parameter (moved by the helper script). Moves made by a drive link are not passed on.
+KIND_POINT = 1; KIND_MASTER = 2;
+
+// ---- parameters (slider number = si(p)) ----
+P_NCH = 1; P_FINAL = 2; P_MEAS = 3; P_TGT = 4; P_TIME = 5; P_LINK = 6; P_GAIN = 10; P_USED = 18;
+P_MSRC = 26; P_DRIVE = 34; P_REF = 35; P_ID = 36; P_HOLD = 37; P_RANGE = 38; P_DRIVEON = 39;
+P_AMODE = 40;           // Auto mode: 0 Target, 1 Match (the previous Act), 2 Reference (the tab's reference)
+P_AIM = 41;             // the level the last Match / Reference Auto aimed for (-200 = none yet)
+P_ZOOM = 42;            // window zoom (100% .. 200%)
+// P_FINAL: Auto = the finale if it's the last Act in its chain; Always; Never
+FIN_AUTO = 0; FIN_ALWAYS = 1; FIN_NEVER = 2;
+NPUB = 41;              // parameters 1..NPUB are published in shared memory and can be set remotely
+// slider for parameter p. Acts: slider p. Gain Stages: slider p + 1 for 1..39 (ON/OFF is slider 1),
+// 40..42 -> sliders 45..47, and their own extras 50..53 -> sliders 41..44 (so older projects load).
+function si(p) ( KIND == KIND_MASTER ? (p < 40 ? p + 1 : (p < 43 ? p + 5 : p - 9)) : p; );
+
+// ---- commands ----
+C_SET = 1; C_ADDGAIN = 2; C_AUTO = 3; C_STOP = 4; C_CANCEL = 5; C_RESETHOLD = 6;
+// auto states and results
+AS_IDLE = 0; AS_QUEUED = 1; AS_WAIT = 2; AS_MEAS = 3;
+R_AUTO = 1; R_MATCH = 2; R_NOSIG = 3; R_CANCEL = 4; R_NOPREV = 5; R_PREVGONE = 6;
+R_REF = 7; R_NOREF = 8; R_REFAFTER = 9; R_REFGONE = 10;
+
+a_mem = 0;
+function alloc(n) local(p) ( p = a_mem; a_mem += n; memset(p, 0, n); p; );
+PLO = alloc(128); PHI = alloc(128); PINT = alloc(128); PDEF = alloc(128);   // per parameter: range, whole numbers, default
+function prange(p, lo, hi, isint) ( PLO[p] = lo; PHI[p] = hi; PINT[p] = isint; );
+prange(P_NCH, 0, 3, 1); prange(P_FINAL, 0, 2, 1); prange(P_MEAS, 0, 2, 1); prange(P_TGT, -60, 0, 0);
+prange(P_TIME, 0, 7, 1);
+a_i = 0; loop(4, prange(P_LINK + a_i, 0, 1, 1); a_i += 1;);
+a_i = 0; loop(8, prange(P_GAIN + a_i, GFLOOR, 60, 0); prange(P_USED + a_i, 0, 1, 1); prange(P_MSRC + a_i, 0, 14, 1); a_i += 1;);
+prange(P_DRIVE, 0, 999999, 1); prange(P_REF, 0, 999999, 1); prange(P_ID, 0, 999999, 1);
+prange(P_HOLD, 0, 5, 1); prange(P_RANGE, 0, 5, 1); prange(P_DRIVEON, 0, 1, 1); prange(P_AMODE, 0, 2, 1);
+prange(P_AIM, -200, 60, 0); prange(P_ZOOM, 0, 5, 1);
+// Acts that drive this one (by slot): their ID and the last gain seen
+DFID = alloc(NSLOT); DFLAST = alloc(NSLOT);
+
+// audio state
+LASTG = alloc(8);
+CUR = alloc(8); RTGT = alloc(8); STEP = alloc(8); GLIN = alloc(8); RAMP = alloc(8); USEDA = alloc(8);
+BPK = alloc(8); BEN = alloc(8); BKE = alloc(8);
+PKD = alloc(8); PKH = alloc(8); PKHT = alloc(8); RMSMS = alloc(8); RMH = alloc(8); RMHT = alloc(8); CLIPF = alloc(8);
+KIN = alloc(32); KOUT = alloc(32);
+IBP = alloc(8); IBE = alloc(8); MPK = alloc(8); MSUM = alloc(8); MBACC = alloc(8);
+CSUM = alloc(8); CPK = alloc(8); AGA = alloc(8); AGN = alloc(8); ARL = alloc(8); DRVS = alloc(8);
+MB = alloc(8 * MAXB); ZW = alloc(MAXB / 10 + 8);
+// UI state
+GGA = alloc(8); GGN = alloc(8); 
+LSTC = alloc(NSLOT); MACT = alloc(256); MARG = alloc(256);
+FIN = alloc(NSLOT); FKEY = alloc(NSLOT);    // per slot: finale (0 no, 1 the chain's last Act, 2 set to Always) and its Finales-tab key
+
+a_i = 0;
+loop(8, GLIN[a_i] = 1; PKD[a_i] = -200; PKH[a_i] = -200; RMH[a_i] = -200; a_i += 1;);
+
+// K-weighting (ITU-R BS.1770) for the Loudness measure
+a_kk = tan($pi * 1681.974450955533 / srate);
+a_vh = 10 ^ (3.999843853973347 / 20); a_vb = a_vh ^ 0.4996667741545416; a_q = 0.7071752369554196;
+a_a0 = 1 + a_kk / a_q + a_kk * a_kk;
+KB0 = (a_vh + a_vb * a_kk / a_q + a_kk * a_kk) / a_a0;
+KB1 = 2 * (a_kk * a_kk - a_vh) / a_a0;
+KB2 = (a_vh - a_vb * a_kk / a_q + a_kk * a_kk) / a_a0;
+KA1 = 2 * (a_kk * a_kk - 1) / a_a0;
+KA2 = (1 - a_kk / a_q + a_kk * a_kk) / a_a0;
+a_kk = tan($pi * 38.13547087602444 / srate); a_q = 0.5003270373238773;
+a_a0 = 1 + a_kk / a_q + a_kk * a_kk;
+KC1 = 2 * (a_kk * a_kk - 1) / a_a0;
+KC2 = (1 - a_kk / a_q + a_kk * a_kk) / a_a0;
+
+a_lbinlen = max(1, floor(srate * 0.01 + 0.5));
+a_glide = max(1, floor(srate * 0.02));
+a_inited = 0; a_prevblk = 0;
+MYSLOT = -1; DUPS = -1;
+!MYNONCE ? MYNONCE = 1 + floor(rand(1000000)) + (time_precise() * 1000 - floor(time_precise() * 1000)) ;
+AST = 0; AU_KIN = 0; a_inm = 0; a_binon = 0; a_kout = 0; a_kout_was = 0;
+AU_LMODE = -1; AU_LMEAS = -1; AU_LREF = -1;
+
+// enum labels (string slots)
+sprintf(300, "Manual"); sprintf(301, "1 s"); sprintf(302, "2 s"); sprintf(303, "3 s");
+sprintf(304, "5 s"); sprintf(305, "10 s"); sprintf(306, "20 s"); sprintf(307, "30 s");
+sprintf(310, "Peak"); sprintf(311, "RMS"); sprintf(312, "LUFS");
+sprintf(320, "Off"); sprintf(321, "1 s"); sprintf(322, "2 s"); sprintf(323, "5 s"); sprintf(324, "10 s"); sprintf(325, "Infinite");
+sprintf(330, "24 dB"); sprintf(331, "36 dB"); sprintf(332, "48 dB"); sprintf(333, "60 dB"); sprintf(334, "72 dB"); sprintf(335, "96 dB");
+sprintf(340, "2"); sprintf(341, "4"); sprintf(342, "6"); sprintf(343, "8");
+sprintf(350, "Target"); sprintf(351, "Match"); sprintf(352, "Reference");
+strcpy(360, "100%"); strcpy(361, "115%"); strcpy(362, "130%"); strcpy(363, "150%"); strcpy(364, "175%"); strcpy(365, "200%");
+sprintf(370, "Auto"); sprintf(371, "Always"); sprintf(372, "Never");
+
+
+// ---------- shared functions, audio-thread copy ----------
+function a_time_sec(v) local(t) ( t = floor(v + 0.5); t == 0 ? 0 : (t == 1 ? 1 : (t == 2 ? 2 : (t == 3 ? 3 : (t == 4 ? 5 : (t == 5 ? 10 : (t == 6 ? 20 : 30)))))); );
+function a_hold_sec(v) local(t) ( t = floor(v + 0.5); t == 0 ? 0 : (t == 1 ? 1 : (t == 2 ? 2 : (t == 3 ? 5 : (t == 4 ? 10 : -1)))); );
+// parameter p of this instance (s < 0) or of the instance in slot s (as it last published it)
+function a_pv(s, p) ( s < 0 ? slider(si(p)) : gmem[SLOTBASE + s * SLOTSZ + O_P + p]; );
+function a_nch(s) ( 2 + 2 * max(0, min(3, floor(a_pv(s, P_NCH) + 0.5))); );
+function a_used(s, c) ( c < a_nch(s) && a_pv(s, P_USED + c) >= 0.5; );
+function a_linked(s, k) ( a_pv(s, P_LINK + k) >= 0.5 && a_used(s, k * 2) && a_used(s, k * 2 + 1); );
+
+// gain groups: a linked pair is one group (one fader), every other used channel is its own group
+function a_groups(s, ga, gn) local(n, k, a, cnt)
+(
+  n = a_nch(s); cnt = 0; k = 0;
+  loop(n / 2,
+    a = k * 2;
+    a_linked(s, k) ? (
+      ga[cnt] = a; gn[cnt] = 2; cnt += 1;
+    ) : (
+      a_used(s, a) ? (ga[cnt] = a; gn[cnt] = 1; cnt += 1;);
+      a_used(s, a + 1) ? (ga[cnt] = a + 1; gn[cnt] = 1; cnt += 1;);
+    );
+    k += 1;
+  );
+  cnt;
+);
+
+// slot that belongs to instance ID id (hint = last known slot), or -1
+function a_find_id(id, hint) local(s, mx, f)
+(
+  f = -1;
+  id >= 100000 ? (
+    (hint >= 0 && gmem[SLOTBASE + hint * SLOTSZ + O_OWNER] === id) ? (
+      f = hint;
+    ) : (
+      mx = min(NSLOT, gmem[GM_MAXSLOT]); s = 0;
+      while (s < mx && f < 0) (
+        gmem[SLOTBASE + s * SLOTSZ + O_OWNER] === id ? f = s;
+        s += 1;
+      );
+    );
+  );
+  f;
+);
+
+function a_live(s, now) ( s >= 0 && now - gmem[SLOTBASE + s * SLOTSZ + O_HEART] < 1; );
+
+function a_clampp(p, v)
+(
+  v = max(PLO[p], min(PHI[p], v));
+  PINT[p] ? v = floor(v + 0.5);
+  v;
+);
+
+// set one of this instance's own parameters and tell REAPER
+function a_setsl(p, v)
+(
+  slider(si(p)) = v;
+  slider_automate(slider(si(p)));
+  sliderchange(slider(si(p)));
+);
+
+// set a parameter of this instance, keeping linked pairs on one fader
+function a_apply(p, v) local(c, pc, k, v2)
+(
+  v = a_clampp(p, v);
+  a_setsl(p, v);
+  (p >= P_GAIN && p < P_GAIN + 8) ? (
+    c = p - P_GAIN; LASTG[c] = v;
+    k = floor(c / 2); pc = c - (c % 2) + (1 - c % 2);
+    a_linked(-1, k) ? (a_setsl(P_GAIN + pc, v); LASTG[pc] = v;);
+  );
+  (p >= P_LINK && p < P_LINK + 4) ? (
+    // linking: the second channel takes the first channel's gain
+    k = p - P_LINK;
+    a_linked(-1, k) ? (
+      v2 = slider(si(P_GAIN + k * 2));
+      a_setsl(P_GAIN + k * 2 + 1, v2); LASTG[k * 2 + 1] = v2;
+    );
+  );
+  (p >= P_USED && p < P_USED + 8) ? (
+    // a channel switched back on inside a linked pair takes its partner's gain
+    c = p - P_USED; k = floor(c / 2); pc = c - (c % 2) + (1 - c % 2);
+    (v >= 0.5 && a_linked(-1, k)) ? (
+      v2 = slider(si(P_GAIN + pc));
+      a_setsl(P_GAIN + c, v2); LASTG[c] = v2;
+    );
+  );
+);
+
+function g_range_db(v) local(t) ( t = floor(v + 0.5); t == 0 ? 24 : (t == 1 ? 36 : (t == 2 ? 48 : (t == 3 ? 60 : (t == 4 ? 72 : 96)))); );
+
+// parameter p of this instance (s < 0) or of the instance in slot s (as it last published it)
+function g_pv(s, p) ( s < 0 ? slider(si(p)) : gmem[SLOTBASE + s * SLOTSZ + O_P + p]; );
+function g_nch(s) ( 2 + 2 * max(0, min(3, floor(g_pv(s, P_NCH) + 0.5))); );
+function g_used(s, c) ( c < g_nch(s) && g_pv(s, P_USED + c) >= 0.5; );
+function g_linked(s, k) ( g_pv(s, P_LINK + k) >= 0.5 && g_used(s, k * 2) && g_used(s, k * 2 + 1); );
+
+// gain groups: a linked pair is one group (one fader), every other used channel is its own group
+function g_groups(s, ga, gn) local(n, k, a, cnt)
+(
+  n = g_nch(s); cnt = 0; k = 0;
+  loop(n / 2,
+    a = k * 2;
+    g_linked(s, k) ? (
+      ga[cnt] = a; gn[cnt] = 2; cnt += 1;
+    ) : (
+      g_used(s, a) ? (ga[cnt] = a; gn[cnt] = 1; cnt += 1;);
+      g_used(s, a + 1) ? (ga[cnt] = a + 1; gn[cnt] = 1; cnt += 1;);
+    );
+    k += 1;
+  );
+  cnt;
+);
+
+// slot that belongs to instance ID id (hint = last known slot), or -1
+function g_find_id(id, hint) local(s, mx, f)
+(
+  f = -1;
+  id >= 100000 ? (
+    (hint >= 0 && gmem[SLOTBASE + hint * SLOTSZ + O_OWNER] === id) ? (
+      f = hint;
+    ) : (
+      mx = min(NSLOT, gmem[GM_MAXSLOT]); s = 0;
+      while (s < mx && f < 0) (
+        gmem[SLOTBASE + s * SLOTSZ + O_OWNER] === id ? f = s;
+        s += 1;
+      );
+    );
+  );
+  f;
+);
+
+function g_live(s, now) ( s >= 0 && now - gmem[SLOTBASE + s * SLOTSZ + O_HEART] < 1; );
+
+function g_clampp(p, v)
+(
+  v = max(PLO[p], min(PHI[p], v));
+  PINT[p] ? v = floor(v + 0.5);
+  v;
+);
+
+// set one of this instance's own parameters and tell REAPER
+function g_setsl(p, v)
+(
+  slider(si(p)) = v;
+  slider_automate(slider(si(p)));
+  sliderchange(slider(si(p)));
+);
+
+// set a parameter of this instance, keeping linked pairs on one fader
+function g_apply(p, v) local(c, pc, k, v2)
+(
+  v = g_clampp(p, v);
+  g_setsl(p, v);
+  (p >= P_GAIN && p < P_GAIN + 8) ? (
+    c = p - P_GAIN; LASTG[c] = v;
+    k = floor(c / 2); pc = c - (c % 2) + (1 - c % 2);
+    g_linked(-1, k) ? (g_setsl(P_GAIN + pc, v); LASTG[pc] = v;);
+  );
+  (p >= P_LINK && p < P_LINK + 4) ? (
+    // linking: the second channel takes the first channel's gain
+    k = p - P_LINK;
+    g_linked(-1, k) ? (
+      v2 = slider(si(P_GAIN + k * 2));
+      g_setsl(P_GAIN + k * 2 + 1, v2); LASTG[k * 2 + 1] = v2;
+    );
+  );
+  (p >= P_USED && p < P_USED + 8) ? (
+    // a channel switched back on inside a linked pair takes its partner's gain
+    c = p - P_USED; k = floor(c / 2); pc = c - (c % 2) + (1 - c % 2);
+    (v >= 0.5 && g_linked(-1, k)) ? (
+      v2 = slider(si(P_GAIN + pc));
+      g_setsl(P_GAIN + c, v2); LASTG[c] = v2;
+    );
+  );
+);
+
+// ---------- audio-thread functions ----------
+function a_new_id() local(id)
+(
+  // the old slot (if any) is given up
+  MYSLOT >= 0 ? gmem[SLOTBASE + MYSLOT * SLOTSZ + O_OWNER] = 0;
+  id = 100000 + (floor(rand(899999) + (time_precise() * 7919 - floor(time_precise() * 7919)) * 899999) % 900000);
+  a_setsl(P_ID, id);
+  MYID = id; MYSLOT = -1;
+);
+
+// keep a slot in shared memory: find the one carrying this ID, or a free one
+function a_claim() local(b, s, f, i)
+(
+  gmem[GM_MAGIC] = MAGIC;
+  MYID = slider(si(P_ID));
+  MYID < 100000 ? a_new_id();
+  MYSLOT >= 0 ? (
+    b = SLOTBASE + MYSLOT * SLOTSZ;
+    (gmem[b + O_OWNER] !== MYID || gmem[b + O_NONCE] !== MYNONCE) ? MYSLOT = -1;
+  );
+  MYSLOT < 0 ? (
+    f = a_find_id(MYID, -1);
+    f >= 0 ? (
+      b = SLOTBASE + f * SLOTSZ;
+      gmem[b + O_NONCE] === MYNONCE ? (
+        MYSLOT = f;
+      ) : (
+        // Another instance carries this ID (a copied plug-in), or this one restarted.
+        // Watch that slot's heartbeat for a quarter second to tell which.
+        DUPS !== f ? (DUPS = f; DUPH = gmem[b + O_HBC]; DUPT = 0;);
+        DUPT += samplesblock / srate;
+        gmem[b + O_HBC] !== DUPH ? (
+          a_new_id(); DUPS = -1;
+        ) : (
+          DUPT >= 0.25 ? (
+            gmem[b + O_NONCE] = MYNONCE; gmem[b + O_HEART] = time_precise();
+            MYSLOT = f; DUPS = -1; gmem[GM_SLOTVER] += 1;
+          );
+        );
+      );
+    ) : (
+      s = 0; f = -1;
+      while (s < NSLOT && f < 0) (
+        b = SLOTBASE + s * SLOTSZ;
+        (gmem[b + O_OWNER] < 100000 || time_precise() - gmem[b + O_HEART] > 2) ? f = s;
+        s += 1;
+      );
+      f >= 0 ? (
+        b = SLOTBASE + f * SLOTSZ;
+        i = 0; loop(SLOTSZ, gmem[b + i] = 0; i += 1;);
+        gmem[b + O_OWNER] = MYID; gmem[b + O_NONCE] = MYNONCE; gmem[b + O_HEART] = time_precise();
+        // the helper script's names for this slot belonged to its old owner
+        gmem[NAMEBASE + f * NAMESZ + N_ID] = 0;
+        f + 1 > gmem[GM_MAXSLOT] ? gmem[GM_MAXSLOT] = f + 1;
+        gmem[GM_SLOTVER] += 1;
+        MYSLOT = f;
+      );
+    );
+  );
+);
+
+// two live slots with one ID (both started at once): the higher slot takes a new ID
+function a_dupcheck() local(s, mx, b, dup)
+(
+  AU_DUPT += samplesblock / srate;
+  AU_DUPT >= 0.5 ? (
+    AU_DUPT = 0; dup = 0;
+    mx = min(NSLOT, gmem[GM_MAXSLOT]); s = 0;
+    loop(mx,
+      b = SLOTBASE + s * SLOTSZ;
+      (s < MYSLOT && gmem[b + O_OWNER] === MYID && a_live(s, a_now)) ? dup = 1;
+      s += 1;
+    );
+    dup ? a_new_id();
+  );
+);
+
+function a_reset_hold() local(c)
+(
+  c = 0;
+  loop(8, PKH[c] = PKD[c]; PKHT[c] = 0; RMH[c] = -200; RMHT[c] = 0; CLIPF[c] = 0; c += 1;);
+);
+
+function a_first_used(s) local(c, f) ( f = -1; c = a_nch(s) - 1; loop(a_nch(s), a_used(s, c) ? f = c; c -= 1;); max(0, f); );
+
+// drive link: the source moved by delta (in its group gi of sng groups; sng 0 = all of
+// this point's groups); move the opposite way, and remember it was the link that moved it
+function a_addgain(gi, delta, sng) local(ng, g, a, cv, nv)
+(
+  ng = a_groups(-1, AGA, AGN);
+  g = 0;
+  loop(ng,
+    (sng == ng ? g == gi : 1) ? (
+      a = AGA[g]; cv = slider(si(P_GAIN + a));
+      cv > GFLOOR ? (
+        nv = max(-99.9, min(60, cv - delta));
+        a_apply(P_GAIN + a, nv);
+        DRVS[a] += nv - cv; AGN[g] == 2 ? DRVS[a + 1] += nv - cv;
+      );
+    );
+    g += 1;
+  );
+);
+
+// drive link from other Acts: every Act on this chain whose drive link points here moves this
+// Act the opposite way when its first fader moves (minus what drive links did to it, so two
+// Acts linked to each other don't bounce). While its link isn't engaged, nothing moves.
+function a_drive_follow() local(s, mx, b, a, gv, id)
+(
+  mx = min(NSLOT, gmem[GM_MAXSLOT]); s = 0;
+  loop(mx,
+    b = SLOTBASE + s * SLOTSZ;
+    id = gmem[b + O_OWNER];
+    (s != MYSLOT && id >= 100000 && gmem[b + O_P + P_DRIVE] === MYID && gmem[b + O_KIND] == KIND_POINT &&
+     a_live(s, a_now) && gmem[b + O_TRACK] == a_trk && (gmem[b + O_PFLAGS] & 5) == (a_pf & 5)) ? (
+      a = a_first_used(s);
+      gv = gmem[b + O_P + P_GAIN + a];
+      gv = gv > GFLOOR ? gv - gmem[b + O_DRVS + a] : GFLOOR;
+      (DFID[s] !== id || DFLAST[s] <= GFLOOR || gv <= GFLOOR) ? (
+        DFID[s] = id; DFLAST[s] = gv;
+      ) : (
+        gv !== DFLAST[s] ? (
+          gmem[b + O_P + P_DRIVEON] >= 0.5 ? a_addgain(0, gv - DFLAST[s], 0);
+          DFLAST[s] = gv;
+        );
+      );
+    ) : (
+      DFID[s] = 0;
+    );
+    s += 1;
+  );
+);
+
+function a_auto_end(res)
+(
+  AST = AS_IDLE; AU_RESULT = res; AU_RESSEQ += 1; AU_DONET = a_now;
+);
+
+// previous Act (or Gain Stage) in this chain, by chain order
+function a_prev_slot() local(s, mx, b, best, bo, o)
+(
+  best = -1; bo = -1000000000;
+  mx = min(NSLOT, gmem[GM_MAXSLOT]); s = 0;
+  loop(mx,
+    b = SLOTBASE + s * SLOTSZ;
+    (s != MYSLOT && gmem[b + O_OWNER] >= 100000 && a_live(s, a_now) && gmem[b + O_TRACK] == a_trk &&
+     (gmem[b + O_PFLAGS] & 5) == (a_pf & 5)) ? (
+      o = gmem[b + O_ORDER];
+      (o < a_order && o > bo) ? (bo = o; best = s;);
+    );
+    s += 1;
+  );
+  best;
+);
+
+// Reference mode: can this instance aim at the instance in slot s? 0 = yes, else the reason:
+// R_REFAFTER when s comes after this one in the same chain, or (helper script) this track feeds
+// s's track through sends or a folder. Either way, changing this gain would move the reference too.
+function a_ref_check(s) local(b)
+(
+  b = SLOTBASE + s * SLOTSZ;
+  (gmem[b + O_TRACK] == a_trk && (gmem[b + O_PFLAGS] & 5) == (a_pf & 5) && gmem[b + O_ORDER] > a_order) ? R_REFAFTER : (
+    (gmem[a_nmb + N_ID] === MYID && (gmem[a_nmb + N_FLAGS] & NF_REFFED)) ? R_REFAFTER : 0;
+  );
+);
+
+// Auto all: is this instance's reference busy in the same run? (a loop of references, A aiming
+// at B while B aims at A, doesn't wait, or neither would ever start)
+function a_ref_busy() local(s, k, t, b, cyc, busy)
+(
+  busy = 0;
+  s = a_find_id(slider(si(P_REF)), -1);
+  (s >= 0 && s != MYSLOT && a_live(s, a_now)) ? (
+    b = SLOTBASE + s * SLOTSZ;
+    (gmem[b + O_RUNID] === ARUN && gmem[b + O_ASTATE] != AS_IDLE) ? (
+      cyc = 0; t = s; k = 0;
+      while (k < 8 && t >= 0 && !cyc && floor(gmem[SLOTBASE + t * SLOTSZ + O_P + P_AMODE] + 0.5) == 2) (
+        t = a_find_id(gmem[SLOTBASE + t * SLOTSZ + O_P + P_REF], -1);
+        t == MYSLOT ? cyc = 1;
+        k += 1;
+      );
+      busy = !cyc;
+    );
+  );
+  busy;
+);
+
+// Auto all runs one chain in order: wait while an earlier point of this run is busy
+function a_preds_busy() local(s, mx, b, busy)
+(
+  busy = 0;
+  mx = min(NSLOT, gmem[GM_MAXSLOT]); s = 0;
+  loop(mx,
+    b = SLOTBASE + s * SLOTSZ;
+    (s != MYSLOT && gmem[b + O_OWNER] >= 100000 && a_live(s, a_now) && gmem[b + O_TRACK] == a_trk &&
+     (gmem[b + O_PFLAGS] & 5) == (a_pf & 5) && gmem[b + O_RUNID] === ARUN && gmem[b + O_ORDER] < a_order) ? (
+      gmem[b + O_ASTATE] != AS_IDLE ? busy = 1;
+    );
+    s += 1;
+  );
+  busy;
+);
+
+function a_auto_start(mode, run) local(c, why)
+(
+  AMODE = mode; ARUN = run;
+  AU_DUR = a_time_sec(slider(si(P_TIME)));
+  (AU_DUR == 0 && run != 0) ? AU_DUR = 5;
+  AU_KIN = slider(si(P_MEAS)) >= 1.5;
+  memset(KIN, 0, 32);
+  c = 0; loop(8, MPK[c] = 0; MSUM[c] = 0; MBACC[c] = 0; CSUM[c] = 0; CPK[c] = 0; c += 1;);
+  AU_NB = 0; AU_BPOS = 0; AU_NS = 0; AU_MN = 0; AU_CN = 0; AU_T = 0; AU_QT = 0; AU_SETTLE = 0; AU_SEEN = 0; AU_CSEQ = -1; AU_LIMIT = 0;
+  AU_SRC = -1; AU_SRCID = 0;
+  AST = run != 0 ? AS_QUEUED : AS_WAIT;
+  mode == 1 ? (
+    AU_SRC = a_prev_slot();
+    AU_SRC < 0 ? a_auto_end(R_NOPREV) : AU_SRCID = gmem[SLOTBASE + AU_SRC * SLOTSZ + O_OWNER];
+  );
+  mode == 2 ? (
+    // the reference this instance aims at (set from the Gain Stage's toolbar)
+    AU_SRCID = slider(si(P_REF));
+    AU_SRC = (AU_SRCID >= 100000 && AU_SRCID !== MYID) ? a_find_id(AU_SRCID, -1) : -1;
+    AU_SRC < 0 ? a_auto_end(R_NOREF) : (
+      !a_live(AU_SRC, a_now) ? a_auto_end(R_REFGONE) : (
+        why = a_ref_check(AU_SRC);
+        why ? a_auto_end(why);
+      );
+    );
+  );
+);
+// a new mode, measure or reference makes the last aimed-for level meaningless
+function a_aim_check() local(m, me, r)
+(
+  m = floor(slider(si(P_AMODE)) + 0.5); me = floor(slider(si(P_MEAS)) + 0.5); r = slider(si(P_REF));
+  (AU_LMODE >= 0 && (m != AU_LMODE || me != AU_LMEAS || (m == 2 && r !== AU_LREF)) && slider(si(P_AIM)) > -150) ? a_setsl(P_AIM, -200);
+  AU_LMODE = m; AU_LMEAS = me; AU_LREF = r;
+);
+
+// level of an auto-stage group (anchor channel a, n channels) from the input bins
+function a_level_auto(a, n) local(m, c, lv, i, e, maxe, thr, sum, cnt, nz, nw, j, z, w, gsum, gcnt, rel)
+(
+  m = slider(si(P_MEAS));
+  lv = -200;
+  m < 0.5 ? (
+    // peak of the louder channel
+    c = a; loop(n, MPK[c] > 0 ? lv = max(lv, 20 * log10(MPK[c])); c += 1;);
+  ) : (
+    m < 1.5 ? (
+      // RMS of the louder channel, ignoring 10 ms bins more than 20 dB below the loudest one
+      c = a;
+      loop(n,
+        maxe = 0; i = 0;
+        loop(AU_NB, e = MB[c * MAXB + i]; e > maxe ? maxe = e; i += 1;);
+        thr = max(maxe * 0.01, 0.0000001);
+        sum = 0; cnt = 0; i = 0;
+        loop(AU_NB, e = MB[c * MAXB + i]; e >= thr ? (sum += e; cnt += 1;); i += 1;);
+        cnt > 0 ? lv = max(lv, 10 * log10(sum / cnt));
+        c += 1;
+      );
+    ) : (
+      // integrated loudness (BS.1770): 400 ms blocks every 100 ms, gated at -70 LUFS and 10 LU below
+      nz = floor(AU_NB / 10); j = 0;
+      loop(nz,
+        z = 0; i = j * 10;
+        loop(10, c = a; loop(n, z += MB[c * MAXB + i]; c += 1;); i += 1;);
+        ZW[j] = z / 10;
+        j += 1;
+      );
+      nw = nz - 3;
+      nw < 1 ? (
+        z = 0; i = 0;
+        loop(AU_NB, c = a; loop(n, z += MB[c * MAXB + i]; c += 1;); i += 1;);
+        z = AU_NB > 0 ? z / AU_NB : 0;
+        z > 0 ? lv = -0.691 + 10 * log10(z);
+      ) : (
+        gsum = 0; gcnt = 0; j = 0;
+        loop(nw,
+          w = (ZW[j] + ZW[j + 1] + ZW[j + 2] + ZW[j + 3]) / 4;
+          (w > 0 && -0.691 + 10 * log10(w) > -70) ? (gsum += w; gcnt += 1;);
+          j += 1;
+        );
+        gcnt > 0 ? (
+          rel = -0.691 + 10 * log10(gsum / gcnt) - 10;
+          gsum = 0; gcnt = 0; j = 0;
+          loop(nw,
+            w = (ZW[j] + ZW[j + 1] + ZW[j + 2] + ZW[j + 3]) / 4;
+            (w > 0 && -0.691 + 10 * log10(w) > max(-70, rel)) ? (gsum += w; gcnt += 1;);
+            j += 1;
+          );
+          gcnt > 0 ? lv = -0.691 + 10 * log10(gsum / gcnt);
+        );
+      );
+    );
+  );
+  lv < -70 ? lv = -200;
+  lv;
+);
+
+// Match: this point's input level for a group, over the same blocks as the previous point's output
+function a_level_in(a, n) local(m, c, lv, e)
+(
+  m = slider(si(P_MEAS));
+  lv = -200;
+  m < 0.5 ? (
+    c = a; loop(n, MPK[c] > 0 ? lv = max(lv, 20 * log10(MPK[c])); c += 1;);
+  ) : (
+    e = 0; c = a; loop(n, e += MSUM[c]; c += 1;);
+    e = AU_MN > 0 ? e / (n * AU_MN) : 0;
+    e > 0 ? lv = 10 * log10(e);
+  );
+  lv < -70 ? lv = -200;
+  lv;
+);
+
+
+// Match: the previous point's output level on this group's source channel(s)
+function a_level_src(a, n) local(m, src, cn, k, c1, c2, lv, e)
+(
+  m = slider(si(P_MEAS));
+  src = floor(slider(si(P_MSRC + a)) + 0.5);
+  (src == 9 || src == 10) ? src = 0;
+  cn = a_nch(AU_SRC);
+  src == 0 ? (
+    // Auto: the same channel(s), wrapped onto the previous point's channel count
+    n == 2 ? (k = floor(a / 2) % (cn / 2); c1 = k * 2; c2 = c1 + 1;) : (c1 = a % cn; c2 = -1;);
+  ) : (
+    src <= 8 ? (c1 = src - 1; c2 = -1;) : (c1 = (src - 11) * 2; c2 = c1 + 1;);
+  );
+  c1 >= cn ? c1 = c1 % cn;
+  c2 >= cn ? c2 = -1;
+  (c2 >= 0 && !a_used(AU_SRC, c2)) ? c2 = -1;
+  !a_used(AU_SRC, c1) ? (c2 >= 0 ? (c1 = c2; c2 = -1;) : c1 = a_first_used(AU_SRC););
+  lv = -200;
+  m < 0.5 ? (
+    e = max(CPK[c1], c2 >= 0 ? CPK[c2] : 0);
+    e > 0 ? lv = 20 * log10(e);
+  ) : (
+    e = c2 >= 0 ? (CSUM[c1] + CSUM[c2]) / 2 : CSUM[c1];
+    e = AU_CN > 0 ? e / AU_CN : 0;
+    e > 0 ? lv = 10 * log10(e);
+  );
+  lv < -70 ? lv = -200;
+  lv;
+);
+
+// Reference: the reference's output level over all its used channels
+function a_level_ref() local(m, cn, c, e, k, lv)
+(
+  m = slider(si(P_MEAS));
+  cn = a_nch(AU_SRC);
+  lv = -200; e = 0; k = 0; c = 0;
+  loop(cn,
+    a_used(AU_SRC, c) ? (
+      m < 0.5 ? e = max(e, CPK[c]) : (e += CSUM[c]; k += 1;);
+    );
+    c += 1;
+  );
+  m < 0.5 ? (
+    e > 0 ? lv = 20 * log10(e);
+  ) : (
+    e = (k > 0 && AU_CN > 0) ? e / (k * AU_CN) : 0;
+    e > 0 ? lv = 10 * log10(e);
+  );
+  lv < -70 ? lv = -200;
+  lv;
+);
+
+function a_auto_finish() local(ng, g, a, n, c, lvl, cl, newg, tgt, any, lim, aim)
+(
+  // the last, partial 10 ms bin
+  (AMODE == 0 && AU_BPOS > 0 && AU_NB < MAXB) ? (
+    c = 0; loop(8, MB[c * MAXB + AU_NB] = MBACC[c] / AU_BPOS; c += 1;);
+    AU_NB += 1;
+  );
+  ng = a_groups(-1, AGA, AGN);
+  tgt = slider(si(P_TGT));
+  any = 0; lim = 0; aim = -200;
+  c = 0; loop(8, ARL[c] = -200; c += 1;);
+  g = 0;
+  loop(ng,
+    a = AGA[g]; n = AGN[g];
+    AMODE == 0 ? (
+      lvl = a_level_auto(a, n);
+      newg = tgt - lvl;
+    ) : (
+      lvl = a_level_in(a, n);
+      cl = (AMODE != 0 && floor(slider(si(P_MSRC + a)) + 0.5) == 9) ? a_level_ref() : a_level_src(a, n);
+      cl <= -150 ? lvl = -200;
+      newg = cl - lvl;
+      // what this group now aims for, in the units the box shows (LUFS: BS.1770 sums the channels)
+      (lvl > -150 && aim <= -150) ? aim = cl + (slider(si(P_MEAS)) >= 1.5 ? 10 * log10(n) - 0.691 : 0);
+    );
+    lvl > -150 ? (
+      newg = floor(newg * 1000 + 0.5) / 1000;
+      newg < -99.9 ? (newg = -99.9; lim = 1;);
+      newg > 60 ? (newg = 60; lim = 1;);
+      a_apply(P_GAIN + a, newg);
+      any = 1;
+    );
+    ARL[a] = lvl; n == 2 ? ARL[a + 1] = lvl;
+    g += 1;
+  );
+  AU_LIMIT = lim;
+  (AMODE != 0 && any) ? (a_setsl(P_AIM, aim); AU_LMODE = floor(slider(si(P_AMODE)) + 0.5););
+  a_auto_end(any ? (AMODE == 0 ? R_AUTO : (AMODE == 1 ? R_MATCH : R_REF)) : R_NOSIG);
+);
+
+function a_auto_block() local(c, sbs, seq, sig, cn, ow, jump)
+(
+  AST == AS_QUEUED ? (
+    // give every point of the run time to receive it, then wait until the earlier ones
+    // (and, in Reference mode, the reference) are done and their new gain has settled for 0.3 s
+    AU_QT += samplesblock / srate;
+    (a_preds_busy() || (AMODE == 2 && a_ref_busy())) ? (AU_SEEN = 1; AU_SETTLE = 0;) : AU_SETTLE += samplesblock / srate;
+    (AU_QT >= 0.1 && (!AU_SEEN || AU_SETTLE >= 0.3)) ? AST = AS_WAIT;
+  );
+  sbs = 0;
+  (AMODE >= 1 && AST >= AS_WAIT) ? (
+    // the previous point (Match) or the reference must still be there
+    AU_SRC = a_find_id(AU_SRCID, AU_SRC);
+    (AU_SRC < 0 || !a_live(AU_SRC, a_now)) ? (
+      a_auto_end(AMODE == 1 ? R_PREVGONE : R_REFGONE);
+    ) : (
+      sbs = SLOTBASE + AU_SRC * SLOTSZ;
+      AU_KIN ? gmem[sbs + O_KREQ] = a_now;
+    );
+  );
+  AST == AS_WAIT ? (
+    sig = 0;
+    AMODE == 0 ? (
+      c = 0; loop(8, (USEDA[c] && IBP[c] >= 0.00316) ? sig = 1; c += 1;);
+    ) : (
+      (!AU_KIN || gmem[sbs + O_KACT] >= 0.5) ? (
+        cn = a_nch(AU_SRC); c = 0;
+        loop(cn, gmem[sbs + O_BPK + c] >= 0.00316 ? sig = 1; c += 1;);
+      );
+      // Reference: this instance needs signal too (the reference may be on another track)
+      AMODE == 2 ? (
+        ow = 0; c = 0; loop(8, (USEDA[c] && IBP[c] >= 0.00316) ? ow = 1; c += 1;);
+        sig = sig && ow;
+      );
+    );
+    sig ? (
+      AST = AS_MEAS;
+      AU_CSEQ = AMODE >= 1 ? gmem[sbs + O_BLKSEQ] : -1;
+    );
+  ) : (
+    AST == AS_MEAS ? (
+      AMODE == 2 ? (
+        // the reference's blocks and this instance's blocks are summed separately over the same
+        // stretch of time (another track's blocks don't always line up with this one's)
+        seq = gmem[sbs + O_BLKSEQ];
+        seq !== AU_CSEQ ? (
+          jump = seq - AU_CSEQ > 1;
+          AU_CSEQ = seq;
+          cn = a_nch(AU_SRC); c = 0;
+          loop(cn,
+            CSUM[c] += AU_KIN ? gmem[sbs + O_BKE + c] : gmem[sbs + O_BEN + c];
+            gmem[sbs + O_BPK + c] > CPK[c] ? CPK[c] = gmem[sbs + O_BPK + c];
+            // blocks were missed: the reference's decaying peak meter still holds their peak
+            jump ? CPK[c] = max(CPK[c], 10 ^ (gmem[sbs + O_PKD + c] / 20));
+            c += 1;
+          );
+          AU_CN += gmem[sbs + O_BLKLEN];
+        );
+        c = 0;
+        loop(8, USEDA[c] ? (MSUM[c] += IBE[c]; IBP[c] > MPK[c] ? MPK[c] = IBP[c];); c += 1;);
+        AU_MN += a_prevblk;
+        AU_T = AU_MN / srate;
+      ) : (
+      AMODE == 1 ? (
+        // the previous point's last block and this point's last block line up
+        seq = gmem[sbs + O_BLKSEQ];
+        seq !== AU_CSEQ ? (
+          AU_CSEQ = seq;
+          cn = a_nch(AU_SRC); c = 0;
+          loop(cn,
+            CSUM[c] += AU_KIN ? gmem[sbs + O_BKE + c] : gmem[sbs + O_BEN + c];
+            gmem[sbs + O_BPK + c] > CPK[c] ? CPK[c] = gmem[sbs + O_BPK + c];
+            c += 1;
+          );
+          AU_CN += gmem[sbs + O_BLKLEN];
+          c = 0;
+          loop(8, USEDA[c] ? (MSUM[c] += IBE[c]; IBP[c] > MPK[c] ? MPK[c] = IBP[c];); c += 1;);
+          AU_MN += a_prevblk;
+        );
+        AU_T = AU_MN / srate;
+      ) : (
+        AU_T = AU_NS / srate;
+      );
+      );
+      ((AU_DUR > 0 && AU_T >= AU_DUR) || AU_NB >= MAXB || AU_T >= 60) ? a_auto_finish();
+    );
+  );
+  a_inm ? (c = 0; loop(8, IBP[c] = 0; IBE[c] = 0; c += 1;););
+);
+
+function a_cmd(cmd, x, y, z)
+(
+  cmd == C_SET ? ((x >= 1 && x <= NPUB && x != P_ID) ? a_apply(x, y););
+  cmd == C_ADDGAIN ? a_addgain(x, y, z);
+  cmd == C_AUTO ? a_auto_start(x, y);
+  cmd == C_STOP ? (
+    AST == AS_MEAS ? (
+      AU_T > 0.05 ? a_auto_finish() : a_auto_end(R_CANCEL);
+    ) : (
+      AST != AS_IDLE ? a_auto_end(R_CANCEL);
+    );
+  );
+  cmd == C_CANCEL ? (AST != AS_IDLE ? a_auto_end(R_CANCEL););
+  cmd == C_RESETHOLD ? a_reset_hold();
+);
+
+// commands from the Gain Stage, the Acts' windows and the helper script
+function a_ring() local(b, w, r, i)
+(
+  b = SLOTBASE + MYSLOT * SLOTSZ;
+  w = gmem[b + O_RING_W]; r = gmem[b + O_RING_R];
+  w - r > RINGN ? r = w - RINGN;
+  w < r ? r = w;
+  while (r < w) (
+    i = b + O_RING + (r % RINGN) * 4;
+    a_cmd(gmem[i], gmem[i + 1], gmem[i + 2], gmem[i + 3]);
+    r += 1;
+  );
+  gmem[b + O_RING_R] = r;
+);
+
+function a_gains() local(c, u, t, n)
+(
+  n = a_nch(-1);
+  c = 0;
+  loop(8,
+    u = c < n && slider(si(P_USED + c)) >= 0.5;
+    t = max(GFLOOR, slider(si(P_GAIN + c)));
+    u ? (
+      (!USEDA[c] || !a_inited) ? (
+        CUR[c] = t; RTGT[c] = t; RAMP[c] = 0; STEP[c] = 0;
+        GLIN[c] = t <= GFLOOR ? 0 : 10 ^ (t / 20);
+      ) : (
+        t !== RTGT[c] ? (RTGT[c] = t; STEP[c] = (t - CUR[c]) / a_glide; RAMP[c] = 1;);
+      );
+    ) : (
+      USEDA[c] ? (PKD[c] = -200; PKH[c] = -200; RMH[c] = -200; RMSMS[c] = 0; CLIPF[c] = 0;);
+    );
+    USEDA[c] = u;
+    c += 1;
+  );
+  a_inited = 1;
+);
+
+// output meters from the last block, published with the block's raw numbers for Match
+function a_meters() local(b, dur, holds, k, c, pk, pkdb, ms, rdb, nm)
+(
+  b = SLOTBASE + MYSLOT * SLOTSZ;
+  dur = a_prevblk / srate;
+  holds = a_hold_sec(slider(si(P_HOLD)));
+  k = 1 - exp(-dur / 0.3);
+  // channels past the channel count only need clearing once
+  nm = max(a_nchs, AU_MCLR); AU_MCLR = a_nchs;
+  c = 0;
+  loop(nm,
+    USEDA[c] ? (
+      pk = BPK[c]; pkdb = pk > 0.0000000001 ? 20 * log10(pk) : -200;
+      PKD[c] = max(pkdb, PKD[c] - 20 * dur); PKD[c] < -200 ? PKD[c] = -200;
+      pk >= 1 ? CLIPF[c] = 1;
+      holds == 0 ? (
+        PKH[c] = PKD[c];
+      ) : (
+        pkdb >= PKH[c] ? (PKH[c] = pkdb; PKHT[c] = 0;) : (
+          PKHT[c] += dur;
+          (holds > 0 && PKHT[c] > holds) ? (PKH[c] = PKD[c]; PKHT[c] = 0;);
+        );
+      );
+      ms = a_prevblk > 0 ? BEN[c] / a_prevblk : 0;
+      RMSMS[c] += k * (ms - RMSMS[c]);
+      rdb = RMSMS[c] > 0.0000000001 ? 10 * log10(RMSMS[c]) : -200;
+      holds == 0 ? (
+        RMH[c] = rdb;
+      ) : (
+        rdb >= RMH[c] ? (RMH[c] = rdb; RMHT[c] = 0;) : (
+          RMHT[c] += dur;
+          (holds > 0 && RMHT[c] > holds) ? (RMH[c] = rdb; RMHT[c] = 0;);
+        );
+      );
+      gmem[b + O_PKD + c] = PKD[c]; gmem[b + O_PKH + c] = PKH[c];
+      gmem[b + O_RMS + c] = rdb; gmem[b + O_RMH + c] = RMH[c]; gmem[b + O_CLIP + c] = CLIPF[c];
+      gmem[b + O_BPK + c] = pk; gmem[b + O_BEN + c] = BEN[c]; gmem[b + O_BKE + c] = BKE[c];
+    ) : (
+      gmem[b + O_PKD + c] = -200; gmem[b + O_PKH + c] = -200; gmem[b + O_RMS + c] = -200;
+      gmem[b + O_RMH + c] = -200; gmem[b + O_CLIP + c] = 0;
+      gmem[b + O_BPK + c] = 0; gmem[b + O_BEN + c] = 0; gmem[b + O_BKE + c] = 0;
+    );
+    BPK[c] = 0; BEN[c] = 0; BKE[c] = 0;
+    c += 1;
+  );
+  gmem[b + O_BLKLEN] = a_prevblk;
+  gmem[b + O_BLKSEQ] += 1;
+);
+
+// ---------- audio key, writer side ----------
+// Writes this plug-in's output samples into a lane in shared memory for a later plug-in on the same track,
+// but only while one is asking (it counts O_AREQ up every block it runs; the asking lasts while the count moves).
+// Called once per block after a_now and the slot are set; the samples are written at the very end of @sample.
+function a_aud_block() local(b, lh, ln, ask, want)
+(
+  a_wr = 0;
+  MYSLOT >= 0 ? (
+    b = SLOTBASE + MYSLOT * SLOTSZ;
+    ln = MYSLOT % AUD_LANES; lh = AUD_HDR + ln * AUD_HSZ;
+    ask = gmem[b + O_AREQ];
+    ask !== a_wrask ? (a_wrask = ask; ask > 0 ? a_wrat = a_now;);
+    want = (a_now - a_wrat < 0.5) && samplesblock <= AUD_R;
+    want ? (
+      (gmem[lh] == 0 || (gmem[lh] == MYSLOT + 1 && gmem[lh + 1] === MYID) || a_now - gmem[lh + 2] > 0.5) ? (
+        gmem[lh] = MYSLOT + 1; gmem[lh + 1] = MYID; gmem[lh + 2] = a_now;
+        gmem[b + O_ALANE] = ln + 1;
+        gmem[b + O_ASTART] = a_wp; gmem[b + O_ALEN] = samplesblock; gmem[b + O_ASEQ] += 1;
+        a_wr0 = AUD_BASE + ln * AUD_LANESZ;
+        a_wr = 1;
+      ) : (
+        gmem[b + O_ALANE] = -1;
+      );
+    ) : (
+      // nobody is asking: give the lane back
+      (gmem[lh] == MYSLOT + 1 && gmem[lh + 1] === MYID) ? gmem[lh] = 0;
+      gmem[b + O_ALANE] = 0;
+    );
+  );
+);
+a_wr = 0; a_wr0 = 0; a_wp = 0; a_wrask = 0; a_wrat = 0;
+
+function a_publish() local(b, p, c)
+(
+  b = SLOTBASE + MYSLOT * SLOTSZ;
+  gmem[b + O_HEART] = a_now; gmem[b + O_HBC] += 1; gmem[b + O_KIND] = KIND; gmem[b + O_SUBKIND] = SUBKIND;
+  gmem[b + O_TRACK] = a_trk; gmem[b + O_POS] = a_pos; gmem[b + O_PFLAGS] = a_pf; gmem[b + O_ORDER] = a_order;
+  gmem[b + O_ASTATE] = AST; gmem[b + O_AMODE] = AMODE; gmem[b + O_RUNID] = ARUN; gmem[b + O_DONET] = AU_DONET;
+  gmem[b + O_RESULT] = AU_RESULT; gmem[b + O_RESSEQ] = AU_RESSEQ; gmem[b + O_LIMIT] = AU_LIMIT;
+  gmem[b + O_ATIME] = AU_T; gmem[b + O_ADUR] = AU_DUR;
+  gmem[b + O_KACT] = a_kout_was;
+  gmem[b + O_ON] = KIND == KIND_MASTER ? slider1 >= 0.5 : 1;
+  // parameters and results every 4th block (plenty for the windows and the reference copies)
+  (AU_PUBN += 1) >= 4 ? (
+    AU_PUBN = 0;
+    p = 1; loop(NPUB, gmem[b + O_P + p] = slider(si(p)); p += 1;);
+    c = 0; loop(8, gmem[b + O_RLVL + c] = ARL[c]; gmem[b + O_DRVS + c] = DRVS[c]; c += 1;);
+  );
+);
+
+// K-weighting filter, state in st[0..3]
+function a_kw(x, st) local(y1, y2)
+(
+  y1 = KB0 * x + st[0];
+  st[0] = KB1 * x - KA1 * y1 + st[1];
+  st[1] = KB2 * x - KA2 * y1;
+  y2 = y1 + st[2];
+  st[2] = -2 * y1 - KC1 * y2 + st[3];
+  st[3] = y1 - KC2 * y2;
+  y2;
+);
+
+// ---------- UI-thread functions ----------
+function X(v) ( g_ox + v * g_sc; );
+function Y(v) ( g_oy + v * g_sc; );
+function W(v) ( v * g_sc; );
+function setc(r, g, b) ( gfx_r = r; gfx_g = g; gfx_b = b; gfx_a = 1; );
+function rect(x, y, w, h, f) ( gfx_rect(floor(X(x)), floor(Y(y)), max(1, floor(W(w) + 0.5)), max(1, floor(W(h) + 0.5)), f); );
+function text(str, x, y, w, h, flags) ( gfx_x = X(x); gfx_y = Y(y); gfx_drawstr(str, flags, X(x + w), Y(y + h)); );
+function hit(x, y, w, h) ( g_mx >= X(x) && g_mx < X(x + w) && g_my >= Y(y) && g_my < Y(y + h); );
+
+// theme: black, orange, purple
+function c_bg() ( setc(0.035, 0.035, 0.04); );
+function c_panel() ( setc(0.085, 0.082, 0.085); );
+function c_card() ( setc(0.112, 0.106, 0.106); );
+function c_well() ( setc(0.05, 0.05, 0.055); );
+function c_border() ( setc(0.28, 0.26, 0.25); );
+function c_text() ( setc(0.94, 0.92, 0.89); );
+function c_dim() ( setc(0.64, 0.60, 0.56); );
+function c_faint() ( setc(0.40, 0.38, 0.36); );
+function c_orange() ( setc(1.0, 0.58, 0.14); );
+function c_purple() ( setc(0.72, 0.56, 1.0); );
+function c_red() ( setc(0.95, 0.33, 0.28); );
+
+// style 0 = orange when active, 1 = purple when active
+function button(x, y, w, h, lbl, active, enabled, style) local(hv, clk)
+(
+  hv = enabled && hit(x, y, w, h);
+  active ? (
+    style == 1 ? setc(0.42, 0.26, 0.74) : setc(0.93, 0.50, 0.07);
+  ) : (
+    hv ? setc(0.21, 0.20, 0.19) : setc(0.15, 0.145, 0.14);
+  );
+  !enabled ? setc(0.10, 0.098, 0.096);
+  rect(x, y, w, h, 1);
+  (active && enabled) ? (style == 1 ? setc(0.66, 0.50, 1.0) : setc(1.0, 0.68, 0.30);) : c_border();
+  rect(x, y, w, h, 0);
+  !enabled ? c_faint() : (active ? (style == 1 ? setc(0.97, 0.95, 1.0) : setc(0.08, 0.04, 0.0);) : c_text());
+  gfx_setfont(1);
+  text(lbl, x, y, w, h, 5);
+  clk = hv && g_lclick && !g_used;
+  clk ? g_used = 1;
+  clk;
+);
+
+// a tick box always shows its state; when it can't be clicked it is drawn dimmer
+function checkbox(x, y, on, enabled) local(clk)
+(
+  on ? (enabled ? setc(0.93, 0.50, 0.07) : setc(0.50, 0.29, 0.07)) : c_well();
+  rect(x, y, 14, 14, 1);
+  on ? (enabled ? setc(1.0, 0.68, 0.30) : setc(0.62, 0.40, 0.16)) : (enabled ? setc(0.45, 0.42, 0.40) : setc(0.32, 0.30, 0.29));
+  rect(x, y, 14, 14, 0);
+  on ? (
+    setc(0.08, 0.04, 0.0);
+    gfx_line(X(x + 3), Y(y + 7), X(x + 6), Y(y + 10)); gfx_line(X(x + 6), Y(y + 10), X(x + 11), Y(y + 3));
+    gfx_line(X(x + 3), Y(y + 8), X(x + 6), Y(y + 11)); gfx_line(X(x + 6), Y(y + 11), X(x + 11), Y(y + 4));
+  );
+  clk = enabled && hit(x - 2, y - 2, 18, 18) && g_lclick && !g_used;
+  clk ? g_used = 1;
+  clk;
+);
+
+function badge(str, x, y, style) local(w, h)
+(
+  gfx_setfont(3);
+  gfx_measurestr(str, w, h);
+  w = w / g_sc + 10;
+  style == 1 ? setc(0.25, 0.17, 0.42) : (style == 2 ? setc(0.36, 0.20, 0.05) : (style == 3 ? setc(0.38, 0.10, 0.09) : setc(0.19, 0.18, 0.17)));
+  rect(x, y + 2, w, 15, 1);
+  style == 1 ? c_purple() : (style == 2 ? c_orange() : (style == 3 ? c_red() : c_dim()));
+  text(str, x, y + 2, w, 15, 5);
+  w + 5;
+);
+
+// ---- controls address a parameter by key = (slot + 2) * 256 + p; slot -1 = this instance ----
+function g_kslot(k) ( floor(k / 256) - 2; );
+function g_kp(k) ( k - (floor(k / 256)) * 256; );
+function g_key(s, p) ( (s + 2) * 256 + p; );
+function g_kget(k) ( g_pv(g_kslot(k), g_kp(k)); );
+// any instance, own (s < 0) or remote: data slot for meters and commands
+function g_ds(s) ( s < 0 ? MYSLOT : s; );
+
+function g_send(s, cmd, x, y, z) local(b, w, r, i)
+(
+  s >= 0 ? (
+    b = SLOTBASE + s * SLOTSZ;
+    w = gmem[b + O_RING_W]; r = gmem[b + O_RING_R];
+    w - r < RINGN ? (
+      i = b + O_RING + (w % RINGN) * 4;
+      gmem[i] = cmd; gmem[i + 1] = x; gmem[i + 2] = y; gmem[i + 3] = z;
+      gmem[b + O_RING_W] = w + 1;
+    );
+  );
+);
+
+function g_kset(k, v, undo) local(s, p)
+(
+  s = g_kslot(k); p = g_kp(k);
+  v = g_clampp(p, v);
+  s < 0 ? (
+    g_apply(p, v);
+    undo ? sliderchange(-1);
+  ) : (
+    g_send(s, C_SET, p, v, 0);
+    gmem[SLOTBASE + s * SLOTSZ + O_P + p] = v;
+  );
+);
+
+
+function parse_num(str) local(i, n, ch, sgn, ip, fp, dv, seen_dot, seen_dig, ok, inf, kil)
+(
+  i = 0; n = strlen(str); sgn = 1; ip = 0; fp = 0; dv = 1;
+  seen_dot = 0; seen_dig = 0; ok = 1; inf = 0; kil = 1;
+  while (i < n) (
+    ch = str_getchar(str, i);
+    (ch == 105 || ch == 73) ? (
+      inf = 1;
+    ) : (
+      (ch == 45 && i == 0) ? (
+        sgn = -1;
+      ) : (
+        (ch == 43 && i == 0) ? (
+          sgn = 1;
+        ) : (
+          (ch == 46 && !seen_dot) ? (
+            seen_dot = 1;
+          ) : (
+            (ch >= 48 && ch <= 57) ? (
+              seen_dig = 1;
+              seen_dot ? (dv *= 10; fp = fp * 10 + (ch - 48);) : (ip = ip * 10 + (ch - 48););
+            ) : (
+              (ch == 107 || ch == 75) ? kil = 1000 : (
+                (ch == 110 || ch == 78 || ch == 102 || ch == 70 || ch == 32 || ch == 104 || ch == 72 || ch == 122 || ch == 90) ? 0 : ok = 0;
+              );
+            );
+          );
+        );
+      );
+    );
+    i += 1;
+  );
+  inf ? (
+    g_parse_ok = 1;
+    -1000000;
+  ) : (
+    g_parse_ok = ok && seen_dig;
+    sgn * (ip + fp / dv) * kil;
+  );
+);
+
+function begin_edit(k)
+(
+  g_edit_k = k; g_edit_fresh = 1;
+  (g_kp(k) >= P_GAIN && g_kp(k) < P_GAIN + 8 && g_kget(k) <= GFLOOR) ? strcpy(#g_edit, "-inf") : sprintf(#g_edit, "%.2f", g_kget(k));
+);
+
+function commit_edit() local(v)
+(
+  g_edit_k > 0 ? (
+    v = parse_num(#g_edit);
+    g_parse_ok ? g_kset(g_edit_k, v, 1);
+  );
+  g_edit_k = 0;
+);
+
+function ctx_menu(k, knd) local(r)
+(
+  gfx_x = g_mx; gfx_y = g_my;
+  knd == 0 ? (
+    r = gfx_showmenu("Reset to 0 dB|-inf (silent)|Type a value...");
+    r == 1 ? g_kset(k, 0, 1);
+    r == 2 ? g_kset(k, GFLOOR, 1);
+    r == 3 ? begin_edit(k);
+  );
+  knd == 2 ? (
+    r = gfx_showmenu("Reset to 20 ms|Instant (0 ms)|Type a value...");
+    r == 1 ? g_kset(k, 20, 1);
+    r == 2 ? g_kset(k, 0, 1);
+    r == 3 ? begin_edit(k);
+  );
+  knd == 3 ? (
+    r = gfx_showmenu("-12 dBFS|-18 dBFS|-6 dBFS|Type a value...");
+    r == 1 ? g_kset(k, -12, 1);
+    r == 2 ? g_kset(k, -18, 1);
+    r == 3 ? g_kset(k, -6, 1);
+    r == 4 ? begin_edit(k);
+  );
+  // 5 = a value on a logarithmic scale (times, frequencies), 6 = any other value: reset or type
+  knd >= 5 ? (
+    r = gfx_showmenu("Reset to default|Type a value...");
+    r == 1 ? g_kset(k, PDEF[g_kp(k)], 1);
+    r == 2 ? begin_edit(k);
+  );
+);
+
+// default value of key k (knd: 0 gain, 2 time, 3 target, others come from the table)
+function g_defval(k, knd) ( knd == 0 ? 0 : (knd == 2 ? 20 : (knd == 3 ? -12 : PDEF[g_kp(k)])); );
+
+// bar scales: mode 1 = gain bar (square-root curve about 0 dB), 2 = linear, 3 = logarithmic.
+// bar_frac turns a value into a 0..1 position along the bar, bar_val turns a position back into a value.
+function bar_frac(m, v, lo, hi)
+(
+  m == 1 ? ( v >= 0 ? 0.5 + 0.5 * sqrt(min(1, v / 60)) : 0.5 - 0.5 * sqrt(min(1, -v / 100)) )
+  : (m == 3 ? log(max(lo, v) / lo) / log(hi / lo) : (m == 4 ? sqrt(max(0, (v - lo) / (hi - lo))) : (v - lo) / (hi - lo)));
+);
+
+function bar_val(m, f, lo, hi) local(t)
+(
+  f = max(0, min(1, f));
+  m == 1 ? ( t = abs(f - 0.5) * 2; f >= 0.5 ? 60 * t * t : -100 * t * t )
+  : (m == 3 ? lo * exp(f * log(hi / lo)) : (m == 4 ? lo + f * f * (hi - lo) : lo + f * (hi - lo)));
+);
+
+// mouse handling shared by a control's bar and its value box (g_vbox = 1 while a value box calls it)
+function ctl_input(k, x, y, w, h, sens, fsens, knd) local(hv)
+(
+  hv = hit(x, y, w, h);
+  (hv && g_lclick && !g_used) ? (
+    g_used = 1;
+    g_vbox ? (
+      // a value box: one click and you can type
+      g_edit_k !== k ? begin_edit(k);
+      g_drag_k = 0;
+    ) : (g_now - g_lastclk_t < 0.35 && g_lastclk_k == k) ? (
+      // a bar: double-click puts it back to its default
+      g_kset(k, g_defval(k, knd), 1);
+      g_drag_k = 0;
+      g_lastclk_t = 0;
+    ) : (
+      g_drag_k = k; g_drag_v = g_kget(k); g_drag_lx = g_mx;
+      g_drag_sens = sens; g_drag_fsens = fsens; g_drag_log = knd == 5;
+      // a bar tracks the pointer exactly along its own drawn scale
+      g_drag_bm = g_bm; g_drag_bw = g_bw; g_drag_blo = g_blo; g_drag_bhi = g_bhi;
+      g_drag_bm > 0 ? (
+        g_drag_f0 = bar_frac(g_drag_bm, g_drag_v, g_drag_blo, g_drag_bhi);
+        g_drag_x0 = g_mx; g_drag_pf = g_fine;
+      );
+      g_lastclk_t = g_now; g_lastclk_k = k;
+    );
+  );
+  (hv && g_rclick && !g_used) ? (
+    g_used = 1;
+    ctx_menu(k, knd);
+  );
+  (hv && g_wheel != 0 && !g_used && !(g_cap & 8)) ? (
+    g_used = 1;
+    knd == 5 ? g_kset(k, g_kget(k) * exp((g_wheel > 0 ? 1 : -1) * (g_fine ? fsens : sens) * 10), 1)
+             : g_kset(k, g_kget(k) + (g_wheel > 0 ? 1 : -1) * (g_fine ? fsens : sens), 1);
+  );
+);
+
+function valbox(x, y, w, h, k, sens, fsens, knd, str, enabled)
+(
+  c_well();
+  rect(x, y, w, h, 1);
+  gfx_setfont(1);
+  g_edit_k == k ? (
+    g_edit_x = x; g_edit_y = y; g_edit_w = w; g_edit_h = h;
+    c_orange(); rect(x, y, w, h, 0);
+    g_edit_fresh ? (setc(0.40, 0.22, 0.04); rect(x + 3, y + 3, w - 6, h - 6, 1););
+    setc(1, 1, 1);
+    sprintf(#g_edshow, "%s|", #g_edit);
+    text(#g_edshow, x + 4, y, w - 8, h, 6);
+  ) : (
+    c_border(); rect(x, y, w, h, 0);
+    enabled ? c_text() : c_faint();
+    text(str, x + 4, y, w - 8, h, 6);
+  );
+  g_vbox = 1;
+  enabled ? ctl_input(k, x, y, w, h, sens, fsens, knd);
+  g_vbox = 0;
+);
+
+function hbar(x, y, w, h, k, enabled) local(v, f, fc)
+(
+  v = g_kget(k);
+  c_well(); rect(x, y, w, h, 1);
+  fc = 0.5; f = bar_frac(1, v, GFLOOR, 60);
+  enabled ? setc(0.92, 0.49, 0.07) : setc(0.20, 0.19, 0.18);
+  f >= fc ? rect(x + w * fc, y + 3, max(1 / g_sc, w * (f - fc)), h - 6, 1)
+          : rect(x + w * f, y + 3, max(1 / g_sc, w * (fc - f)), h - 6, 1);
+  setc(0.36, 0.34, 0.33); rect(x + w * fc, y + 1, 1 / g_sc, h - 2, 1);
+  enabled ? setc(1.0, 0.95, 0.88) : c_faint();
+  rect(x + w * f - 1.5, y + 1, 3, h - 2, 1);
+  c_border(); rect(x, y, w, h, 0);
+  g_bm = 1; g_bw = w; g_blo = GFLOOR; g_bhi = 60;
+  enabled ? ctl_input(k, x, y, w, h, 0.1, 0.01, 0);
+  g_bm = 0;
+);
+
+function fmt_gain(dst, v) ( v <= GFLOOR ? strcpy(dst, "-inf dB") : sprintf(dst, "%+.2f dB", v); );
+
+function gain_ctl(x, y, wbar, k, enabled)
+(
+  hbar(x, y, wbar, 20, k, enabled);
+  fmt_gain(#g_gv, g_kget(k));
+  valbox(x + wbar + 6, y, 84, 20, k, 0.1, 0.01, 0, #g_gv, enabled);
+);
+
+function enum_menu(dst, first, count, cv) local(i)
+(
+  strcpy(dst, "");
+  i = 0;
+  loop(count,
+    i == cv ? strcat(dst, "!");
+    strcat(dst, first + i);
+    i < count - 1 ? strcat(dst, "|");
+    i += 1;
+  );
+);
+
+// enum dropdown for key k (labels in string slots first..first+count-1)
+function dropdown(x, y, w, h, k, first, count, enabled) local(cv, r)
+(
+  cv = floor(g_kget(k) + 0.5);
+  sprintf(#g_dd, "%s  v", first + cv);
+  button(x, y, w, h, #g_dd, 0, enabled, 0) ? (
+    enum_menu(#g_menu, first, count, cv);
+    gfx_x = X(x); gfx_y = Y(y + h);
+    r = gfx_showmenu(#g_menu);
+    r > 0 ? g_kset(k, r - 1, 1);
+  );
+);
+
+function target_ctl(x, y, w, k, enabled)
+(
+  sprintf(#g_tg, g_kget(P_MEAS + floor(k / 256) * 256) >= 1.5 ? "%.1f LUFS" : "%.1f dBFS", g_kget(k));
+  valbox(x, y, w, 22, k, 0.1, 0.01, 3, #g_tg, enabled);
+);
+
+function label(str, x, y, w) ( gfx_setfont(1); c_dim(); text(str, x, y, w, 22, 4); );
+
+// meter value (dB) -> 0..1 along the bar; the scale runs from -range to +6 dB
+function mfrac(db) ( (min(6, max(-g_range, db)) + g_range) / (g_range + 6); );
+
+function zone_bar(x0, wbar, y, h, db, bright) local(f1, f3, fz1, fz2)
+(
+  f1 = mfrac(db);
+  fz1 = mfrac(-12); fz2 = mfrac(-3);
+  min(f1, fz1) > 0 ? (setc(0.18 * bright, 0.62 * bright, 0.33 * bright); rect(x0, y, wbar * min(f1, fz1), h, 1););
+  f1 > fz1 ? (
+    f3 = min(f1, fz2);
+    setc(0.80 * bright, 0.66 * bright, 0.18 * bright);
+    rect(x0 + wbar * fz1, y, wbar * (f3 - fz1), h, 1);
+  );
+  f1 > fz2 ? (
+    setc(0.86 * bright, 0.25 * bright, 0.22 * bright);
+    rect(x0 + wbar * fz2, y, wbar * (f1 - fz2), h, 1);
+  );
+);
+
+// one channel's output meter from slot ds; tgt = the level Auto aims for (a tick; -200 = none)
+function meter(x, y, w, h, ds, c, tgt, active) local(b, d, f)
+(
+  b = SLOTBASE + ds * SLOTSZ;
+  setc(0.09, 0.10, 0.11); rect(x, y, w, h, 1);
+  d = 0;
+  while (d >= -g_range) (
+    f = mfrac(d);
+    d == 0 ? setc(0.42, 0.45, 0.50) : setc(0.19, 0.20, 0.23);
+    rect(x + w * f, y, 1 / g_sc, h, 1);
+    d -= g_step;
+  );
+  (ds >= 0 && active) ? (
+    zone_bar(x, w, y + 1, h - 2, gmem[b + O_PKD + c], 0.75);
+    zone_bar(x, w, y + h * 0.3, h * 0.4, gmem[b + O_RMS + c], 1.15);
+    gmem[b + O_PKH + c] > -150 ? (setc(1, 1, 1); rect(x + w * mfrac(gmem[b + O_PKH + c]) - 1, y, 2, h, 1););
+    gmem[b + O_RMH + c] > -150 ? (setc(0.45, 0.75, 1); rect(x + w * mfrac(gmem[b + O_RMH + c]) - 1, y + 1, 2, h - 2, 1););
+  );
+  tgt > -150 ? (c_purple(); rect(x + w * mfrac(tgt), y, max(1, 2 / g_sc), h, 1););
+  setc(0.30, 0.33, 0.38); rect(x, y, w, h, 0);
+);
+
+function fmt_db(dst, prefix, db)
+(
+  db <= -150 ? sprintf(dst, "%s -inf", prefix) : sprintf(dst, "%s %.1f", prefix, db);
+);
+
+// PK and RMS hold readouts for a group (the louder channel); a click clears the holds
+function readouts(x, y, ds, a, n, active) local(b, pk, rm, cl, i)
+(
+  b = SLOTBASE + ds * SLOTSZ;
+  pk = -200; rm = -200; cl = 0;
+  (ds >= 0 && active) ? (
+    i = a; loop(n, pk = max(pk, gmem[b + O_PKH + i]); rm = max(rm, gmem[b + O_RMH + i]); gmem[b + O_CLIP + i] > 0 ? cl = 1; i += 1;);
+  );
+  cl ? setc(0.70, 0.16, 0.14) : setc(0.12, 0.13, 0.15);
+  rect(x, y, 70, 20, 1);
+  setc(0.12, 0.13, 0.15); rect(x + 74, y, 76, 20, 1);
+  setc(0.30, 0.33, 0.38); rect(x, y, 70, 20, 0); rect(x + 74, y, 76, 20, 0);
+  gfx_setfont(3);
+  fmt_db(#g_pk, "PK", pk);
+  setc(0.95, 0.96, 0.98); text(#g_pk, x + 3, y, 64, 20, 6);
+  fmt_db(#g_rm, "RMS", rm);
+  setc(0.55, 0.80, 1); text(#g_rm, x + 77, y, 70, 20, 6);
+  (active && ds >= 0 && hit(x, y, 150, 20) && g_lclick && !g_used) ? (g_used = 1; g_send(ds, C_RESETHOLD, 0, 0, 0););
+);
+
+// a name the helper script published for slot ds (returns its length)
+function readname(dst, ds, off, maxlen) local(nb, i, ch)
+(
+  strcpy(dst, "");
+  i = 0;
+  ds >= 0 ? (
+    nb = NAMEBASE + ds * NAMESZ + off;
+    while (i < maxlen && (ch = gmem[nb + i]) > 0) (str_setchar(dst, i, ch); i += 1;);
+  );
+  i;
+);
+
+function named(ds) ( ds >= 0 && gmem[NAMEBASE + ds * NAMESZ + N_ID] === gmem[SLOTBASE + ds * SLOTSZ + O_OWNER] && gmem[SLOTBASE + ds * SLOTSZ + O_OWNER] > 0; );
+
+// "OUT: <the plug-in before this Act>"
+// the plug-in an Act is built into (O_SUBKIND), for titles when the helper script isn't running
+function sub_name(dst, sk) ( strcpy(dst, (sk == 1 ? "TwoStorms Compressor" : (sk == 2 ? "TwoStorms EQ" : (sk == 3 ? "TwoStorms Multiband" : (sk == 4 ? "TwoStorms IR Loader" : (sk == 5 ? "TwoStorms Saturator" : (sk == 6 ? "TwoStorms Delay" : (sk == 7 ? "TwoStorms Chorus" : (sk == 8 ? "TwoStorms Tremolo" : (sk == 9 ? "TwoStorms Defitcher" : (sk == 10 ? "TwoStorms Gate" : (sk == 11 ? "TwoStorms Wah" : "Act")))))))))))); );
+
+// is there another live TwoStorms plug-in of the same kind in the chain of slot ds?
+function dup_kind(ds) local(s, mx, b, myb, n)
+(
+  n = 0; myb = SLOTBASE + ds * SLOTSZ; mx = min(NSLOT, gmem[GM_MAXSLOT]); s = 0;
+  loop(mx,
+    b = SLOTBASE + s * SLOTSZ;
+    (s != ds && gmem[b + O_OWNER] >= 100000 && gmem[b + O_KIND] == gmem[myb + O_KIND] && gmem[b + O_SUBKIND] == gmem[myb + O_SUBKIND] &&
+     gmem[b + O_TRACK] == gmem[myb + O_TRACK] && (gmem[b + O_PFLAGS] & 5) == (gmem[myb + O_PFLAGS] & 5) &&
+     (s == MYSLOT || g_live(s, g_now))) ? n = 1;
+    s += 1;
+  );
+  n;
+);
+
+// title of the instance in slot ds: a TwoStorms plug-in by its own name ("TwoStorms Gain Stage",
+// "TwoStorms Compressor", ...), an Act as "Act - OUT: <the plug-in before it>" (name from the helper script)
+function point_title(dst, ds) local(sk, kd)
+(
+  sk = gmem[SLOTBASE + ds * SLOTSZ + O_SUBKIND]; kd = gmem[SLOTBASE + ds * SLOTSZ + O_KIND];
+  kd == KIND_MASTER ? strcpy(dst, "TwoStorms Gain Stage") : (
+    sk > 0 ? sub_name(dst, sk) : (
+      (named(ds) && readname(#g_ptn, ds, N_PREV, N_PREVLEN) > 0) ? sprintf(dst, "Act - OUT: %s", #g_ptn)
+        : sprintf(dst, "Act (FX %d)", (gmem[SLOTBASE + ds * SLOTSZ + O_POS] & 65535) + 1)
+    );
+  );
+  ((kd == KIND_MASTER || sk > 0) && dup_kind(ds)) ? (
+    sprintf(#g_ptn, " (FX %d)", (gmem[SLOTBASE + ds * SLOTSZ + O_POS] & 65535) + 1); strcat(dst, #g_ptn);
+  );
+);
+
+// ---- finales: in each chain, the Acts set to Always, or else its last Act set to Auto ----
+// A bypassed or offline Act is passed over unless every Auto Act in its chain is.
+function fin_listed(s) local(b)
+(
+  b = SLOTBASE + s * SLOTSZ;
+  gmem[b + O_OWNER] >= 100000 && !(gmem[b + O_PFLAGS] & 1) &&
+    (s == MYSLOT || g_live(s, g_now) || (named(s) && (gmem[NAMEBASE + s * NAMESZ + N_FLAGS] & 1)));
+);
+function fin_active(s) ( named(s) ? (gmem[NAMEBASE + s * NAMESZ + N_FLAGS] & 6) == 2 : (s == MYSLOT || g_live(s, g_now)); );
+function fin_order(s) ( named(s) ? gmem[NAMEBASE + s * NAMESZ + N_ORDER] : gmem[SLOTBASE + s * SLOTSZ + O_ORDER]; );
+function same_chain(s, t) local(b, c)
+(
+  b = SLOTBASE + s * SLOTSZ; c = SLOTBASE + t * SLOTSZ;
+  gmem[b + O_TRACK] == gmem[c + O_TRACK] && (gmem[b + O_PFLAGS] & 5) == (gmem[c + O_PFLAGS] & 5);
+);
+// fills FIN (0 = not a finale, 1 = its chain's last Act, 2 = set to Always) and FKEY for every slot.
+// The Finales tab keeps hide and reference settings under FKEY: for a chain's main finale (its last
+// Act, or its last Always one) that's the chain's Gain Stage, so the settings stay with the track
+// when another Act becomes its finale; any other finale keeps its own.
+function fin_compute() local(mx, s, t, b, m, alw, best, bo, ba, ab, abo, gs, o, act, prim)
+(
+  mx = min(NSLOT, gmem[GM_MAXSLOT]);
+  s = 0;
+  loop(mx,
+    FIN[s] = (gmem[SLOTBASE + s * SLOTSZ + O_KIND] == KIND_POINT && fin_listed(s)) ? -1 : 0;   // -1 = an Act not done yet
+    FKEY[s] = 0;
+    s += 1;
+  );
+  s = 0;
+  loop(mx,
+    FIN[s] < 0 ? (
+      alw = 0; best = -1; bo = -1000000000; ba = 0; ab = -1; abo = -1000000000; gs = 0;
+      t = 0;
+      loop(mx,
+        b = SLOTBASE + t * SLOTSZ;
+        (gmem[b + O_OWNER] >= 100000 && same_chain(s, t)) ? (
+          FIN[t] < 0 ? (
+            m = floor(gmem[b + O_P + P_FINAL] + 0.5);
+            o = fin_order(t);
+            m == FIN_ALWAYS ? (alw = 1; o > abo ? (abo = o; ab = t;););
+            m == FIN_AUTO ? (
+              act = fin_active(t);
+              ((act && !ba) || (act == ba && o > bo)) ? (best = t; bo = o; ba = act;);
+            );
+          ) : (
+            (gmem[b + O_KIND] == KIND_MASTER && gs == 0 && fin_listed(t)) ? gs = gmem[b + O_OWNER];
+          );
+        );
+        t += 1;
+      );
+      prim = alw ? ab : best;
+      t = 0;
+      loop(mx,
+        (FIN[t] < 0 && same_chain(s, t)) ? (
+          b = SLOTBASE + t * SLOTSZ;
+          FIN[t] = alw ? (floor(gmem[b + O_P + P_FINAL] + 0.5) == FIN_ALWAYS ? 2 : 0) : (t == best ? 1 : 0);
+          FKEY[t] = (t == prim && gs >= 100000) ? gs : gmem[b + O_OWNER];
+        );
+        t += 1;
+      );
+    );
+    s += 1;
+  );
+);
+// the finale of slot ds's chain (its main one), or -1
+function fin_of_chain(ds) local(mx, t, f, fo)
+(
+  f = -1; fo = -1000000000; mx = min(NSLOT, gmem[GM_MAXSLOT]); t = 0;
+  loop(mx, (FIN[t] > 0 && same_chain(ds, t) && fin_order(t) > fo) ? (f = t; fo = fin_order(t);); t += 1;);
+  f;
+);
+function fin_tail(ds) ( named(ds) && (gmem[NAMEBASE + ds * NAMESZ + N_FLAGS] & NF_TAIL); );
+
+function track_name(dst, ds) local(t)
+(
+  (named(ds) && readname(dst, ds, N_TNAME, N_TNAMELEN) > 0) ? 0 : (
+    t = gmem[SLOTBASE + ds * SLOTSZ + O_TRACK];
+    t < 0 ? strcpy(dst, "MASTER") : sprintf(dst, "Track %d", t + 1);
+  );
+);
+
+function auto_busy(s) local(ds) ( ds = g_ds(s); ds >= 0 && gmem[SLOTBASE + ds * SLOTSZ + O_ASTATE] != AS_IDLE; );
+
+// Auto mode of instance s: 0 = Target, 1 = Match (Acts), 2 = Reference
+function auto_mode(s) local(ds, m)
+(
+  ds = g_ds(s);
+  m = floor(g_pv(s, P_AMODE) + 0.5);
+  ds >= 0 ? max(0, min(2, m)) : 0;
+);
+
+// Reference mode of instance s: 0 = fine, 1 = no reference, 2 = the reference is after s
+// (later in the same chain, or on a track s's track feeds: the helper script checks routing)
+function ref_state(s) local(ds, rid, rs, b, rb)
+(
+  ds = g_ds(s);
+  rid = g_pv(s, P_REF);
+  rs = (ds >= 0 && rid >= 100000 && rid !== gmem[SLOTBASE + ds * SLOTSZ + O_OWNER]) ? g_find_id(rid, -1) : -1;
+  rs < 0 ? 1 : (
+    b = SLOTBASE + ds * SLOTSZ; rb = SLOTBASE + rs * SLOTSZ;
+    ((gmem[rb + O_TRACK] == gmem[b + O_TRACK] && (gmem[rb + O_PFLAGS] & 5) == (gmem[b + O_PFLAGS] & 5) &&
+      gmem[rb + O_ORDER] > gmem[b + O_ORDER]) || (named(ds) && (gmem[NAMEBASE + ds * NAMESZ + N_FLAGS] & NF_REFFED))) ? 2 : 0;
+  );
+);
+
+// where the meter's purple tick goes: the Target, or (Match / Reference) the level the last Auto aimed for
+function aim_tick(s) ( auto_mode(s) == 0 ? g_pv(s, P_TGT) : g_pv(s, P_AIM); );
+
+// start Auto (in this instance's mode), or stop it if it is running
+function auto_click(s) local(ds, b)
+(
+  ds = g_ds(s);
+  ds >= 0 ? (
+    b = SLOTBASE + ds * SLOTSZ;
+    (gmem[b + O_ASTATE] != AS_IDLE) ? g_send(ds, C_STOP, 0, 0, 0) : g_send(ds, C_AUTO, auto_mode(s), 0, 0);
+  );
+);
+
+function auto_label(s) local(ds, st)
+(
+  ds = g_ds(s);
+  st = ds >= 0 ? gmem[SLOTBASE + ds * SLOTSZ + O_ASTATE] : 0;
+  st == AS_MEAS ? "Stop" : (st != AS_IDLE ? "Cancel" : "Auto");
+);
+
+// the value box: the Target (typed, Target mode), or in Match and Reference mode a read-only box,
+// blank until Auto runs and then showing the level it aimed for
+
+// the Time box: its dropdown while idle; while Auto runs it reads queued / waiting / the seconds listened,
+// and for a few seconds after a run that heard nothing, "no signal"
+function auto_time_box(x, y, w, h, s, en) local(ds, st, b)
+(
+  ds = g_ds(s);
+  b = SLOTBASE + ds * SLOTSZ;
+  st = ds >= 0 ? gmem[b + O_ASTATE] : AS_IDLE;
+  st == AS_IDLE ? (
+    (ds >= 0 && gmem[b + O_RESULT] == R_NOSIG && g_now - gmem[b + O_DONET] < 4) ?
+      button(x, y, w, h, "no signal", 0, 0, 0) :
+      dropdown(x, y, w, h, g_key(s, P_TIME), 300, 8, en);
+  ) : (
+    st == AS_MEAS ? sprintf(#g_dd, "%.1f s", gmem[b + O_ATIME]) : strcpy(#g_dd, st == AS_QUEUED ? "queued" : "waiting");
+    button(x, y, w, h, #g_dd, 1, 1, 0);
+  );
+);
+
+// Auto mode dropdown: Target / Reference / Match
+function mode_ctl(x, y, w, s, isact, enabled) local(m, r)
+(
+  m = auto_mode(s);
+  sprintf(#g_dd, "%s  v", 350 + m);
+  button(x, y, w, 22, #g_dd, 0, enabled, 0) ? (
+    strcpy(#g_menu, m == 0 ? "!" : ""); strcat(#g_menu, 350); strcat(#g_menu, "|");
+    strcat(#g_menu, m == 2 ? "!" : ""); strcat(#g_menu, 352); strcat(#g_menu, "|");
+    strcat(#g_menu, m == 1 ? "!" : ""); strcat(#g_menu, 351);
+    gfx_x = X(x); gfx_y = Y(y + 22);
+    r = gfx_showmenu(#g_menu);
+    r > 0 ? g_kset(g_key(s, P_AMODE), r == 1 ? 0 : (r == 2 ? 2 : 1), 1);
+  );
+);
+
+// drive link for instance sa: drive Act idb, or (DRIVE_PARAM) learn a plug-in parameter, or 0 = none
+function set_drive(sa, idb)
+(
+  // ask the helper script to learn the next plug-in parameter that gets moved
+  (idb == DRIVE_PARAM && g_ds(sa) >= 0) ? gmem[SLOTBASE + g_ds(sa) * SLOTSZ + O_DLEARN] += 1;
+  g_kset(g_key(sa, P_DRIVE), idb, 1);
+  idb > 0 ? g_kset(g_key(sa, P_DRIVEON), 1, 1);
+);
+
+function title_of_id(dst, id) local(s)
+(
+  s = g_find_id(id, -1);
+  s >= 0 ? point_title(dst, s) : strcpy(dst, "(missing)");
+);
+
+// ---- per-frame input, typing, dragging, zoom and scrolling ----
+function zoom_of(z) local(t) ( t = floor(z + 0.5); t <= 0 ? 1 : (t == 1 ? 1.15 : (t == 2 ? 1.3 : (t == 3 ? 1.5 : (t == 4 ? 1.75 : 2)))); );
+
+// the zoom is shared: changing it in one TwoStorms window changes it in every one (each keeps
+// a copy, so it is also remembered with the project)
+function zoom_sync() local(z)
+(
+  z = floor(slider(si(P_ZOOM)) + 0.5);
+  (gmem[GM_ZOOMV] > 0 && gmem[GM_ZOOMV] !== g_zoomv) ? (
+    // another window changed it
+    g_zoomv = gmem[GM_ZOOMV];
+    gmem[GM_ZOOM] !== z ? (z = gmem[GM_ZOOM]; slider(si(P_ZOOM)) = z; sliderchange(slider(si(P_ZOOM))););
+  ) : (
+    (g_zoomlast >= 0 && z !== g_zoomlast) ? (
+      // changed here
+      gmem[GM_ZOOM] = z; gmem[GM_ZOOMV] += 1; g_zoomv = gmem[GM_ZOOMV];
+    );
+  );
+  g_zoomlast = z;
+);
+
+function frame_begin(basew) local(availw)
+(
+  g_now = time_precise();
+  g_dt = g_last > 0 ? min(0.5, max(0, g_now - g_last)) : 0;
+  g_last = g_now;
+  !g_zinit ? (g_zinit = 1; g_zoomlast = -1;);
+  zoom_sync();
+  g_sc = zoom_of(slider(si(P_ZOOM))) * max(1, gfx_ext_retina);
+  // too wide for the window: a horizontal scroll bar; otherwise centered
+  g_sbw = 10 * max(1, gfx_ext_retina);
+  g_cw = basew * g_sc;
+  availw = gfx_w - (g_needv ? g_sbw : 0);
+  g_hmax = max(0, ceil(g_cw - availw));
+  g_needh = g_hmax > 0;
+  g_hscroll = max(0, min(g_hmax, g_hscroll));
+  g_ox = g_needh ? -g_hscroll : max(0, floor((availw - g_cw) / 2));
+  g_oy = -g_scroll;
+  gfx_setfont(1, "Arial", floor(13 * g_sc + 0.5));
+  gfx_setfont(2, "Arial", floor(13 * g_sc + 0.5), 'b');
+  gfx_setfont(3, "Arial", floor(11 * g_sc + 0.5));
+  gfx_setfont(4, "Arial", floor(15 * g_sc + 0.5), 'b');
+  g_mx = mouse_x; g_my = mouse_y; g_cap = mouse_cap;
+  g_lclick = (g_cap & 1) && !(g_lastcap & 1);
+  g_rclick = (g_cap & 2) && !(g_lastcap & 2);
+  g_lrel = !(g_cap & 1) && (g_lastcap & 1);
+  g_fine = (g_cap & 4) || (g_cap & 8);
+  g_wheel = mouse_wheel; mouse_wheel = 0;
+  g_hwheel = mouse_hwheel; mouse_hwheel = 0;
+  g_used = 0;
+  // the scroll bars grab clicks on the right and bottom edges first
+  (g_lclick && g_needv && g_mx >= gfx_w - g_sbw && g_my < g_availh) ? (
+    g_used = 1; g_sbdrag = 1;
+    g_sboff = (g_my >= g_thy && g_my < g_thy + g_th) ? g_my - g_thy : g_th / 2;
+  );
+  (g_lclick && !g_used && g_needh && g_my >= gfx_h - g_sbw && g_mx < g_availw) ? (
+    g_used = 1; g_hsbdrag = 1;
+    g_hsboff = (g_mx >= g_thx && g_mx < g_thx + g_tw) ? g_mx - g_thx : g_tw / 2;
+  );
+  // typing into a value box
+  g_edit_k > 0 ? (
+    g_lclick && !(g_mx >= X(g_edit_x) && g_mx < X(g_edit_x + g_edit_w) && g_my >= Y(g_edit_y) && g_my < Y(g_edit_y + g_edit_h)) ? commit_edit();
+    g_ch = gfx_getchar();
+    while (g_ch > 0) (
+      g_ch == 13 ? (
+        commit_edit(); g_ch = 0;
+      ) : (
+        g_ch == 27 ? (
+          g_edit_k = 0; g_ch = 0;
+        ) : (
+          g_ch == 8 ? (
+            g_edit_fresh ? strcpy(#g_edit, "") : str_setlen(#g_edit, max(0, strlen(#g_edit) - 1));
+            g_edit_fresh = 0;
+          ) : (
+            ((g_ch >= 48 && g_ch <= 57) || g_ch == 46 || g_ch == 45 || g_ch == 43 ||
+             g_ch == 105 || g_ch == 110 || g_ch == 102 || g_ch == 73 || g_ch == 78 || g_ch == 70) ? (
+              g_edit_fresh ? (strcpy(#g_edit, ""); g_edit_fresh = 0;);
+              strlen(#g_edit) < 12 ? (sprintf(#g_chs, "%c", g_ch); strcat(#g_edit, #g_chs););
+            );
+          );
+        );
+      );
+      g_ch > 0 ? g_ch = gfx_getchar();
+    );
+  );
+  g_range = g_range_db(slider(si(P_RANGE)));
+  g_step = g_range <= 36 ? 3 : 6;
+  // helper script heartbeat
+  gmem[GM_SCRIPTBEAT] !== g_sbeat ? (g_sbeat = gmem[GM_SCRIPTBEAT]; g_sbeat_t = g_now;);
+  g_script_ok = gmem[GM_SCRIPTBEAT] > 0 && g_now - g_sbeat_t < 2;
+  g_script_old = g_script_ok && gmem[GM_SCRIPTVER] < SCRIPT_NEED;
+  c_bg(); gfx_rect(0, 0, gfx_w, gfx_h, 1);
+);
+
+function frame_end(content_h)
+(
+  // a Shift + click toggle puts itself back when the mouse is let go
+  (g_mom_k > 0 && !(g_cap & 1)) ? (g_kset(g_mom_k, g_mom_prev, 1); g_mom_k = 0;);
+  (g_drag_k > 0 && (g_cap & 1) && g_drag_bm > 0) ? (
+    // bars: the position moves exactly as far as the pointer does (a tenth as far while fine-adjusting)
+    g_drag_f1 = g_drag_f0 + (g_mx - g_drag_x0) / (g_sc * g_drag_bw) * (g_drag_pf ? 0.1 : 1);
+    g_fine != g_drag_pf ? (
+      g_drag_f0 = max(0, min(1, g_drag_f1)); g_drag_x0 = g_mx; g_drag_pf = g_fine;
+      g_drag_f1 = g_drag_f0;
+    );
+    g_drag_v = bar_val(g_drag_bm, g_drag_f1, g_drag_blo, g_drag_bhi);
+    g_drag_v = max(PLO[g_kp(g_drag_k)], min(PHI[g_kp(g_drag_k)], g_drag_v));
+    g_drag_v != g_kget(g_drag_k) ? g_kset(g_drag_k, g_drag_v, 0);
+  ) : (g_drag_k > 0 && (g_cap & 1)) ? (
+    g_dx = (g_mx - g_drag_lx) / g_sc;
+    g_drag_lx = g_mx;
+    g_dx != 0 ? (
+      // a logarithmic value moves by a factor per pixel, any other by an amount
+      g_drag_v = g_drag_log ? exp(log(max(0.000001, g_drag_v)) + g_dx * (g_fine ? g_drag_fsens : g_drag_sens))
+                            : g_drag_v + g_dx * (g_fine ? g_drag_fsens : g_drag_sens);
+      g_drag_v = max(PLO[g_kp(g_drag_k)], min(PHI[g_kp(g_drag_k)], g_drag_v));
+      g_kset(g_drag_k, g_drag_v, 0);
+    );
+  );
+  (g_lrel && g_drag_k > 0) ? (
+    g_kset(g_drag_k, g_drag_v, 1);
+    g_drag_k = 0;
+  );
+  // vertical: the wheel; horizontal: Shift + wheel, or a sideways wheel / trackpad swipe
+  g_cpx = content_h * g_sc;
+  g_availh = gfx_h - (g_needh ? g_sbw : 0);
+  g_maxs = max(0, ceil(g_cpx - g_availh));
+  g_needv = g_maxs > 0;
+  g_availw = gfx_w - (g_needv ? g_sbw : 0);
+  // the wheel over the horizontal scroll bar scrolls sideways (no modifier key needed)
+  (g_wheel != 0 && !g_used && g_needh && g_my >= gfx_h - g_sbw) ? (
+    g_used = 1; g_hscroll -= sign(g_wheel) * 60 * g_sc;
+  );
+  (g_wheel != 0 && !g_used) ? (
+    (g_cap & 8) ? (g_needh ? g_hscroll -= sign(g_wheel) * 60 * g_sc;) : g_scroll -= sign(g_wheel) * 60 * g_sc;
+  );
+  (g_hwheel != 0 && !g_used) ? g_hscroll += sign(g_hwheel) * 60 * g_sc;
+  g_needv ? (
+    g_th = max(24, g_availh * g_availh / g_cpx);
+    (g_sbdrag && (g_cap & 1)) ? g_scroll = (g_my - g_sboff) / max(1, g_availh - g_th) * g_maxs;
+    g_scroll = max(0, min(g_maxs, g_scroll));
+    g_thy = g_scroll / g_maxs * (g_availh - g_th);
+    setc(0.08, 0.075, 0.075); gfx_rect(gfx_w - g_sbw, 0, g_sbw, g_availh, 1);
+    setc(0.85, 0.46, 0.08); gfx_rect(gfx_w - g_sbw + 2, g_thy, g_sbw - 3, g_th, 1);
+  ) : (
+    g_scroll = 0;
+  );
+  g_needh ? (
+    g_tw = max(24, g_availw * g_availw / g_cw);
+    (g_hsbdrag && (g_cap & 1)) ? g_hscroll = (g_mx - g_hsboff) / max(1, g_availw - g_tw) * g_hmax;
+    g_hscroll = max(0, min(g_hmax, g_hscroll));
+    g_thx = g_hscroll / g_hmax * (g_availw - g_tw);
+    setc(0.08, 0.075, 0.075); gfx_rect(0, gfx_h - g_sbw, g_availw, g_sbw, 1);
+    setc(0.85, 0.46, 0.08); gfx_rect(g_thx, gfx_h - g_sbw + 2, g_tw, g_sbw - 3, 1);
+  ) : (
+    g_hscroll = 0;
+  );
+  (g_needv && g_needh) ? (setc(0.05, 0.05, 0.05); gfx_rect(gfx_w - g_sbw, gfx_h - g_sbw, g_sbw, g_sbw, 1););
+  !(g_cap & 1) ? (g_sbdrag = 0; g_hsbdrag = 0;);
+  g_lastcap = g_cap;
+);
+// previous Act / Gain Stage in the chain of the instance in slot ds
+function g_prev_slot(ds) local(s, mx, b, myb, best, bo, o)
+(
+  best = -1;
+  ds >= 0 ? (
+    myb = SLOTBASE + ds * SLOTSZ; bo = -1000000000;
+    mx = min(NSLOT, gmem[GM_MAXSLOT]); s = 0;
+    loop(mx,
+      b = SLOTBASE + s * SLOTSZ;
+      (s != ds && gmem[b + O_OWNER] >= 100000 && g_live(s, g_now) && gmem[b + O_TRACK] == gmem[myb + O_TRACK] &&
+       (gmem[b + O_PFLAGS] & 5) == (gmem[myb + O_PFLAGS] & 5)) ? (
+        o = gmem[b + O_ORDER];
+        (o < gmem[myb + O_ORDER] && o > bo) ? (bo = o; best = s;);
+      );
+      s += 1;
+    );
+  );
+  best;
+);
+
+function value_ctl(x, y, w, s, enabled) local(m, aim, rs, ps, ok)
+(
+  m = auto_mode(s);
+  m == 0 ? target_ctl(x, y, w, g_key(s, P_TGT), enabled) : (
+    c_well(); rect(x, y, w, 22, 1); c_border(); rect(x, y, w, 22, 0);
+    gfx_setfont(3);
+    ok = 0;
+    m == 2 ? (
+      // Reference: the matched level, then the name of what it is matching
+      rs = ref_state(s);
+      rs == 1 ? (c_faint(); text("set reference in Gain Stage", x + 4, y, w - 8, 22, 4);) : (
+        rs == 2 ? (c_red(); text("reference is after this", x + 4, y, w - 8, 22, 4);) : (
+          title_of_id(#g_rt, g_pv(s, P_REF)); ok = 1;
+        );
+      );
+    ) : (
+      // Match: the matched level, then the name of the Act or plug-in before this one
+      ps = g_prev_slot(g_ds(s));
+      ps < 0 ? (c_faint(); text("no earlier Act", x + 4, y, w - 8, 22, 4);) : (point_title(#g_rt, ps); ok = 1;);
+    );
+    ok ? (
+      aim = g_pv(s, P_AIM);
+      aim > -150 ? (
+        sprintf(#g_tg, g_pv(s, P_MEAS) >= 1.5 ? "%.1f LUFS - %s" : "%.1f dBFS - %s", aim, #g_rt);
+        enabled ? c_purple() : c_faint(); text(#g_tg, x + 4, y, w - 8, 22, 4);
+      ) : (
+        enabled ? c_purple() : c_faint(); text(#g_rt, x + 4, y, w - 8, 22, 4);
+      );
+    );
+  );
+);
+
+// per-group source channels for Match / Reference (key P_MSRC + group): Auto, one channel, or a pair (average).
+// Same Ch = the same channels as this group; All Ch = every channel of the source combined. Match: the previous point. Reference: the reference.
+function src_ctl(x, y, w, h, s, a, compact, enabled) local(m, src, pnc, sel, i, r, o)
+(
+  m = auto_mode(s);
+  src = m == 1 ? g_prev_slot(g_ds(s)) : (g_pv(s, P_REF) >= 100000 ? g_find_id(g_pv(s, P_REF), -1) : -1);
+  pnc = src >= 0 ? g_nch(src) : 2;
+  sel = floor(g_pv(s, P_MSRC + a) + 0.5);
+  o = 1;
+  sel == 0 ? strcpy(#g_sm, "Same Ch") : (sel == 9 ? strcpy(#g_sm, "All Ch") : (sel <= 8 ? sprintf(#g_sm, "ch %d", sel) : sprintf(#g_sm, "ch %d-%d", (sel - 11) * 2 + 1, (sel - 11) * 2 + 2)));
+  compact ? sprintf(#g_sml, "%s  v", #g_sm) : sprintf(#g_sml, "%s: %s  v", m == 1 ? "Match" : "Ref", #g_sm);
+  button(x, y, w, h, #g_sml, 0, enabled, 0) ? (
+    strcpy(#g_menu, sel == 0 ? "!Same Ch" : "Same Ch");
+    o ? strcat(#g_menu, sel == 9 ? "|!All Ch (combined)" : "|All Ch (combined)");
+    i = 0;
+    loop(pnc, sprintf(#g_mi, "|%s%s ch %d", sel == i + 1 ? "!" : "", m == 1 ? "Previous Act" : "Reference", i + 1); strcat(#g_menu, #g_mi); i += 1;);
+    i = 0;
+    loop(pnc / 2, sprintf(#g_mi, "|%s%s ch %d-%d (average)", sel == i + 11 ? "!" : "", m == 1 ? "Previous Act" : "Reference", i * 2 + 1, i * 2 + 2); strcat(#g_menu, #g_mi); i += 1;);
+    gfx_x = X(x); gfx_y = Y(y + h);
+    r = gfx_showmenu(#g_menu);
+    r == 1 ? g_kset(g_key(s, P_MSRC + a), 0, 1);
+    (o && r == 2) ? g_kset(g_key(s, P_MSRC + a), 9, 1);
+    (r >= 2 + o && r <= pnc + 1 + o) ? g_kset(g_key(s, P_MSRC + a), r - 1 - o, 1);
+    r > pnc + 1 + o ? g_kset(g_key(s, P_MSRC + a), 11 + r - pnc - 2 - o, 1);
+  );
+);
+
+// live Acts on the same chain as slot ds (not ds itself), into LSTC; returns the count
+function g_chain_points(ds) local(s, mx, b, myb, n)
+(
+  n = 0;
+  ds >= 0 ? (
+    myb = SLOTBASE + ds * SLOTSZ;
+    mx = min(NSLOT, gmem[GM_MAXSLOT]); s = 0;
+    loop(mx,
+      b = SLOTBASE + s * SLOTSZ;
+      (s != ds && gmem[b + O_OWNER] >= 100000 && gmem[b + O_KIND] == KIND_POINT && g_live(s, g_now) &&
+       gmem[b + O_TRACK] == gmem[myb + O_TRACK] && (gmem[b + O_PFLAGS] & 5) == (gmem[myb + O_PFLAGS] & 5)) ? (
+        LSTC[n] = s; n += 1;
+      );
+      s += 1;
+    );
+  );
+  n;
+);
+
+// drive link menu for instance s (own = -1)
+function drive_menu(s, x, y) local(ds, n, i, r, cv, nm)
+(
+  ds = g_ds(s);
+  n = g_chain_points(ds);
+  cv = g_pv(s, P_DRIVE);
+  strcpy(#g_menu, cv >= DRIVE_PARAM ? "None" : "!None");
+  i = 0;
+  loop(n,
+    point_title(#g_mt, LSTC[i]);
+    strcat(#g_menu, "|");
+    gmem[SLOTBASE + LSTC[i] * SLOTSZ + O_OWNER] === cv ? strcat(#g_menu, "!");
+    strcat(#g_menu, #g_mt);
+    MARG[i] = gmem[SLOTBASE + LSTC[i] * SLOTSZ + O_OWNER];
+    i += 1;
+  );
+  strcat(#g_menu, cv == DRIVE_PARAM ? "|!Plug-in parameter: click here, then move the parameter" : "|Plug-in parameter: click here, then move the parameter");
+  cv >= DRIVE_PARAM ? strcat(#g_menu, g_pv(s, P_DRIVEON) >= 0.5 ? "|!Engaged" : "|Engaged");
+  gfx_x = X(x); gfx_y = Y(y);
+  r = gfx_showmenu(#g_menu);
+  r == 1 ? set_drive(s, 0);
+  (r > 1 && r <= n + 1) ? set_drive(s, MARG[r - 2]);
+  r == n + 2 ? set_drive(s, DRIVE_PARAM);
+  r == n + 3 ? g_kset(g_key(s, P_DRIVEON), g_pv(s, P_DRIVEON) < 0.5, 1);
+);
+
+// the ... menu for this instance: the same entries as its card in the Gain Stage (finale, channels, links, drive link, peak holds)
+function act_menu(x, y) local(nc, i, n, r, act, dn, dsl, fm, fixc, ps)
+(
+  ps = -1;
+  nc = g_nch(ps);
+  strcpy(#g_menu, ""); n = 0;
+  fixc = SUBKIND > 0;
+  fm = floor(g_pv(ps, P_FINAL) + 0.5);
+  strcat(#g_menu, fm == FIN_AUTO ? "!Finale: auto (the last Act in the chain)" : "Finale: auto (the last Act in the chain)");
+  n += 1; MACT[n] = 1; MARG[n] = FIN_AUTO;
+  strcat(#g_menu, fm == FIN_ALWAYS ? "|!Finale: always" : "|Finale: always");
+  n += 1; MACT[n] = 1; MARG[n] = FIN_ALWAYS;
+  strcat(#g_menu, fm == FIN_NEVER ? "|!Finale: never" : "|Finale: never");
+  n += 1; MACT[n] = 1; MARG[n] = FIN_NEVER;
+  i = 0;
+  !fixc ? loop(4,
+    sprintf(#g_mi, "|%sChannels: %d", floor(g_pv(ps, P_NCH) + 0.5) == i ? "!" : "", i * 2 + 2);
+    strcat(#g_menu, #g_mi); n += 1; MACT[n] = 2; MARG[n] = i;
+    i += 1;
+  );
+  i = 0;
+  !fixc ? loop(nc / 2,
+    sprintf(#g_mi, "|%sLink %d-%d (one fader)", g_pv(ps, P_LINK + i) >= 0.5 ? "!" : "", i * 2 + 1, i * 2 + 2);
+    strcat(#g_menu, #g_mi); n += 1; MACT[n] = 3; MARG[n] = i;
+    i += 1;
+  );
+  i = 0;
+  !fixc ? loop(nc,
+    sprintf(#g_mi, "|%sUse channel %d", g_pv(ps, P_USED + i) >= 0.5 ? "!" : "", i + 1);
+    strcat(#g_menu, #g_mi); n += 1; MACT[n] = 4; MARG[n] = i;
+    i += 1;
+  );
+  strcat(#g_menu, g_pv(ps, P_DRIVE) >= DRIVE_PARAM ? "|Drive link: none" : "|!Drive link: none");
+  n += 1; MACT[n] = 5; MARG[n] = 0;
+  dn = MYSLOT >= 0 ? g_chain_points(MYSLOT) : 0;
+  i = 0;
+  loop(dn,
+    dsl = LSTC[i];
+    point_title(#g_mt, dsl);
+    sprintf(#g_mi, "|%sDrive link: %s", g_pv(ps, P_DRIVE) === gmem[SLOTBASE + dsl * SLOTSZ + O_OWNER] ? "!" : "", #g_mt);
+    strcat(#g_menu, #g_mi); n += 1; MACT[n] = 5; MARG[n] = gmem[SLOTBASE + dsl * SLOTSZ + O_OWNER];
+    i += 1;
+  );
+  strcat(#g_menu, g_pv(ps, P_DRIVE) == DRIVE_PARAM ? "|!Drive link: plug-in parameter (click, then move it)" : "|Drive link: plug-in parameter (click, then move it)");
+  n += 1; MACT[n] = 5; MARG[n] = DRIVE_PARAM;
+  g_pv(ps, P_DRIVE) >= DRIVE_PARAM ? (
+    strcat(#g_menu, g_pv(ps, P_DRIVEON) >= 0.5 ? "|!Drive link engaged" : "|Drive link engaged");
+    n += 1; MACT[n] = 7; MARG[n] = 0;
+  );
+  strcat(#g_menu, "|Clear peak holds"); n += 1; MACT[n] = 6; MARG[n] = 0;
+  gfx_x = X(x); gfx_y = Y(y);
+  r = gfx_showmenu(#g_menu);
+  (r >= 1 && r <= n) ? (
+    act = MACT[r];
+    act == 1 ? g_kset(g_key(ps, P_FINAL), MARG[r], 1);
+    act == 2 ? g_kset(g_key(ps, P_NCH), MARG[r], 1);
+    act == 3 ? g_kset(g_key(ps, P_LINK + MARG[r]), g_pv(ps, P_LINK + MARG[r]) < 0.5, 1);
+    act == 4 ? g_kset(g_key(ps, P_USED + MARG[r]), g_pv(ps, P_USED + MARG[r]) < 0.5, 1);
+    act == 5 ? set_drive(ps, MARG[r]);
+    (act == 6 && MYSLOT >= 0) ? g_send(MYSLOT, C_RESETHOLD, 0, 0, 0);
+    act == 7 ? g_kset(g_key(ps, P_DRIVEON), g_pv(ps, P_DRIVEON) < 0.5, 1);
+  );
+);
+
+// what a plug-in parameter drive link is doing (status from the helper script)
+function drive_param_label(dst, s) local(ds, st)
+(
+  ds = g_ds(s);
+  st = named(ds) ? gmem[NAMEBASE + ds * NAMESZ + N_DSTAT] : 0;
+  !g_script_ok ? strcpy(dst, "Drive link: a plug-in parameter (start the helper script)") : (
+   g_script_old ? strcpy(dst, "Drive link: update the helper script (old one running)") : (
+    st == 1 ? (readname(#g_dpn, ds, N_DNAME, N_DNAMELEN); sprintf(dst, "Drive link: %s", #g_dpn);) : (
+      st == 2 ? strcpy(dst, "Drive link: now move the plug-in parameter to link") : (
+        st == 3 ? strcpy(dst, "Drive link: the linked parameter is gone") : (
+          st == 4 ? strcpy(dst, "Drive link: that parameter doesn't show dB") : strcpy(dst, "Drive link: waiting for the helper script")
+        );
+      );
+    );
+   );
+  );
+);
+
+function drive_label_core(dst, s) local(cv, ps)
+(
+  cv = g_pv(s, P_DRIVE);
+  cv == DRIVE_PARAM ? (
+    drive_param_label(#g_dpl, s); sprintf(dst, "%s  v", #g_dpl);
+  ) : (
+    cv >= 100000 ? (
+      ps = g_find_id(cv, -1);
+      (ps >= 0 && g_ds(s) >= 0 && gmem[SLOTBASE + ps * SLOTSZ + O_TRACK] == gmem[SLOTBASE + g_ds(s) * SLOTSZ + O_TRACK]) ? (
+        title_of_id(#g_dl, cv); sprintf(dst, "Drive link: %s  v", #g_dl);
+      ) : (
+        strcpy(dst, "Drive link: partner not in this chain  v");
+      );
+    ) : (
+      strcpy(dst, "Drive link: none  v");
+    );
+  );
+);
+
+function drive_label(dst, s) local(cv, ps)
+(
+  cv = g_pv(s, P_DRIVE);
+  drive_label_core(dst, s);
+  (cv >= DRIVE_PARAM && g_pv(s, P_DRIVEON) < 0.5) ? (str_setlen(dst, strlen(dst) - 3); strcat(dst, " (bypassed)  v"););
+);
+
+// ---- transient shaper (this plug-in only): 1 to 3 bands, before the gain, per gain group ----
+// Bands: one (the whole signal), or two or three with a crossover at each ticked crossover frequency (the two are
+// sorted, so it doesn't matter which box holds the lower one, and kept at least a third of an octave apart). Each
+// crossover is Linkwitz-Riley (24 dB/oct) built from state-variable filters: low = LR4 low pass at the lower frequency
+// (then, with three bands, an allpass at the upper one so it stays in phase with the others); mid and high = LR4 low
+// and high pass at the upper frequency of what's above. The bands add up to the input with only an allpass phase shift
+// (flat level), and being in phase with each other, raising or lowering one band never digs a notch at a crossover.
+// One band needs no filters at all; two need two filters per channel, three need five.
+// Per band and gain group, three followers on the band (the channels of a linked pair share them): fast (the peak
+// envelope: 0.3 ms up, then held - 25 ms for the lowest band, about 2.5 cycles of a band's lower edge for the others,
+// at least 3 ms - so a low note's cycles don't make it ripple - then 50 ms down); slow attack (follows the fast one,
+// 15 ms up, 50 ms down) and slow release (follows the fast one at once, 300 ms down). Attack scales the band by
+// (fast / slow attack) ^ amount while a hit rises above what came before; Sustain by (slow release / fast) ^ amount
+// while it dies away (equal steps in dB up and down; each capped at 12 dB). On a steady sound the followers agree and
+// nothing changes. The gain is smoothed (0.5 ms) so it never clicks.
+// Lookahead (off by default): the audio is delayed by the lookahead time and the followers listen to it undelayed, so
+// a change of gain is already there when a hit arrives. It adds that much latency (reported to REAPER) while the
+// shaper is switched on.
+// Off (or every amount at 0, with no lookahead): nothing runs at all. Switching on lets the followers settle for
+// 50 ms, then fades in over 10 ms; switching off fades out over 10 ms.
+P_TSON = 43; P_TSATT = 44; P_TSSUS = 45; P_TSX1 = 50; P_TSX2 = 51; P_TSXO1 = 53; P_TSXO2 = 54; P_TSLA = 55; P_TSLAMS = 56;
+// band b's attack and sustain (b counted from the lowest band in use): P_TSATT + 2 * b and P_TSSUS + 2 * b
+prange(P_TSON, 0, 1, 1); a_i = 0; loop(6, prange(P_TSATT + a_i, -100, 100, 0); a_i += 1;);
+prange(P_TSX1, 20, 20000, 0); prange(P_TSX2, 20, 20000, 0);
+prange(P_TSXO1, 0, 1, 1); prange(P_TSXO2, 0, 1, 1); prange(P_TSLA, 0, 1, 1); prange(P_TSLAMS, 0.1, 10, 0);
+PDEF[P_TSX1] = 200; PDEF[P_TSX2] = 2500; PDEF[P_TSLAMS] = 2;
+TGA = alloc(8); TGN = alloc(8);
+// per group (8) x band (3): fast, slow attack, slow release, hold count, smoothed gain; the band's meter (most up / down)
+TSF = alloc(24); TSS = alloc(24); TSL = alloc(24); TSH = alloc(24); TSG = alloc(24);
+TSBX = alloc(3); TSBN = alloc(3); TSMD = alloc(3); TSHS = alloc(3); TSA = alloc(3); TSU = alloc(3);
+// per channel: filter states (5 state-variable filters x 2), this sample's bands, its group's first gain (-1: none)
+TSX = alloc(80); TSB = alloc(24); TSGI = alloc(8);
+// lookahead: per channel 4 delay lines (3 bands, then the dry signal), up to 4096 samples
+TSLN = 4096; TSLM = TSLN - 1; LAB = alloc(8 * 4 * TSLN);
+a_i = 0; loop(3, TSBX[a_i] = 1; TSBN[a_i] = 1; a_i += 1;);
+ts_mix = 0; ts_lp = 0;
+
+// one state-variable filter step (topology-preserving): returns the low pass, ts_bp the band pass
+function tsvf(x, st, a1, a2, a3) local(v1, v2, v3)
+(
+  v3 = x - st[1];
+  v1 = a1 * st[0] + a2 * v3;
+  v2 = st[1] + a2 * st[0] + a3 * v3;
+  st[0] = 2 * v1 - st[0]; st[1] = 2 * v2 - st[1];
+  ts_bp = v1;
+  v2;
+);
+// a crossover's coefficients for f Hz (Q = 1/sqrt 2, so two in a row make a Linkwitz-Riley 24 dB/oct)
+function ts_xo(f, i) local(g)
+(
+  g = tan($pi * min(f, 0.45 * srate) / srate);
+  TSXC[i * 3] = 1 / (1 + g * (g + sqrt(2))); TSXC[i * 3 + 1] = g * TSXC[i * 3]; TSXC[i * 3 + 2] = g * TSXC[i * 3 + 1];
+);
+TSXC = alloc(6);
+TSK2 = 2 * sqrt(2);
+
+// a crossover frequency as the boxes show it
+function ts_ffmt(dst, f) ( f >= 1000 ? sprintf(dst, "%.2f kHz", f / 1000) : sprintf(dst, "%.0f Hz", f); );
+
+// ---- the transient shaper's controls: label, a bar filled from the centre, and its value box ----
+function tsctl(lbl, x, y, p, enabled) local(k, v, f)
+(
+  k = g_key(-1, p); v = slider(si(p));
+  label(lbl, x, y, 54);
+  f = max(0, min(1, (v + 100) / 200));
+  c_well(); rect(x + 56, y + 1, 150, 20, 1);
+  enabled ? setc(0.92, 0.49, 0.07) : setc(0.20, 0.19, 0.18);
+  f >= 0.5 ? rect(x + 56 + 75, y + 4, max(1 / g_sc, 150 * (f - 0.5)), 14, 1) : rect(x + 56 + 150 * f, y + 4, max(1 / g_sc, 150 * (0.5 - f)), 14, 1);
+  setc(0.36, 0.34, 0.33); rect(x + 56 + 75, y + 2, 1 / g_sc, 18, 1);
+  enabled ? setc(1.0, 0.95, 0.88) : c_faint();
+  rect(x + 56 + 150 * f - 1.5, y + 2, 3, 18, 1);
+  c_border(); rect(x + 56, y + 1, 150, 20, 0);
+  g_bm = 2; g_bw = 150; g_blo = -100; g_bhi = 100;
+  ctl_input(k, x + 56, y + 1, 150, 20, 1, 0.1, 6);
+  g_bm = 0;
+  sprintf(#g_tsv, "%+.0f%%", v);
+  valbox(x + 212, y + 1, 70, 20, k, 1, 0.1, 6, #g_tsv, 1);
+);
+
+@slider
+// a host change (automation, ReaLearn, a preset) to one side of a linked pair moves the other side too
+s_k = 0;
+loop(4,
+  s_a = s_k * 2; s_b = s_a + 1;
+  (slider(si(P_LINK + s_k)) >= 0.5 && s_b < 2 + 2 * max(0, min(3, floor(slider(si(P_NCH)) + 0.5))) &&
+   slider(si(P_USED + s_a)) >= 0.5 && slider(si(P_USED + s_b)) >= 0.5) ? (
+    s_ga = slider(si(P_GAIN + s_a)); s_gb = slider(si(P_GAIN + s_b));
+    s_ga !== s_gb ? (
+      s_ga !== LASTG[s_a] ? (
+        slider(si(P_GAIN + s_b)) = s_ga; sliderchange(slider(si(P_GAIN + s_b)));
+      ) : (
+        slider(si(P_GAIN + s_a)) = s_gb; sliderchange(slider(si(P_GAIN + s_a)));
+      );
+    );
+  );
+  s_k += 1;
+);
+s_c = 0; loop(8, LASTG[s_c] = slider(si(P_GAIN + s_c)); s_c += 1;);
+
+@block
+// fold the fast path's meter accumulators (see @sample) into the per-channel ones
+BPK[0] = max(BPK[0], a_fp0); BPK[1] = max(BPK[1], a_fp1); BEN[0] += a_fe0; BEN[1] += a_fe1;
+a_fp0 = 0; a_fp1 = 0; a_fe0 = 0; a_fe1 = 0;
+a_now = time_precise();
+a_claim();
+MYSLOT >= 0 ? a_dupcheck();
+a_pos = 0; a_pf = 0;
+a_trk = get_host_placement(a_pos, a_pf);
+MYSLOT >= 0 ? (
+  a_nmb = NAMEBASE + MYSLOT * NAMESZ;
+  // chain order: from the helper script when it has seen this instance, else REAPER's FX position
+  a_order = gmem[a_nmb + N_ID] === MYID ? gmem[a_nmb + N_ORDER] : ((a_pf & 2) ? -100000 : 0) + a_pos;
+  a_ring();
+  a_aim_check();
+  a_drive_follow();
+);
+a_gains();
+a_nchs = a_nch(-1);
+a_auto_block();
+a_kout_was = a_kout;
+MYSLOT >= 0 ? (
+  a_meters();
+  // the next point is matching loudness against this one: K-weight the output too
+  a_kout = a_now - gmem[SLOTBASE + MYSLOT * SLOTSZ + O_KREQ] < 0.5;
+  (a_kout && !a_kout_was) ? memset(KOUT, 0, 32);
+  a_publish();
+) : (
+  a_kout = 0;
+  a_c = 0; loop(8, BPK[a_c] = 0; BEN[a_c] = 0; BKE[a_c] = 0; a_c += 1;);
+);
+// the audio key (a gate later on this track may be listening to this plug-in)
+a_aud_block();
+a_inm = AST >= AS_WAIT;
+a_binon = AST == AS_MEAS && AMODE == 0;
+a_kin = a_inm && AU_KIN;
+a_prevblk = samplesblock;
+// transient shaper: settings for this block. While it's off (and once its 10 ms fade-out is over) nothing runs, and
+// its filters and followers start again from zero
+ts_sw = slider(si(P_TSON)) >= 0.5;
+ts_nb = 1 + (slider(si(P_TSXO1)) >= 0.5) + (slider(si(P_TSXO2)) >= 0.5);
+ts_any = 0; a_i = 0;
+loop(3,
+  TSA[a_i] = a_i < ts_nb ? slider(si(P_TSATT + 2 * a_i)) * 0.01 : 0;
+  TSU[a_i] = a_i < ts_nb ? slider(si(P_TSSUS + 2 * a_i)) * 0.01 : 0;
+  (TSA[a_i] != 0 || TSU[a_i] != 0) ? ts_any = 1;
+  a_i += 1;
+);
+ts_on = ts_sw && ts_any;
+// lookahead: the delay, reported to REAPER as latency while the shaper is switched on
+ts_ld = (ts_sw && slider(si(P_TSLA)) >= 0.5) ? max(1, min(TSLM, floor(slider(si(P_TSLAMS)) * 0.001 * srate + 0.5))) : 0;
+pdc_delay = ts_ld; pdc_bot_ch = 0; pdc_top_ch = 8;
+ts_run = ts_on || ts_mix > 0;
+// the crossovers: one band (none ticked), two (the ticked one), or three (the two, the lower one first)
+a_t = slider(si(P_TSX1)); a_r = slider(si(P_TSX2));
+ts_fa = ts_nb == 3 ? min(a_t, a_r) : (slider(si(P_TSXO1)) >= 0.5 ? a_t : a_r);
+ts_fb = max(max(a_t, a_r), ts_fa * 1.26);
+ts_run ? (
+  // starting, or the bands changed: the filters and followers start from zero
+  (!ts_was || ts_nb !== ts_nbw) ? (
+    memset(TSX, 0, 80); memset(TSF, 0, 24); memset(TSS, 0, 24); memset(TSL, 0, 24); memset(TSH, 0, 24);
+    a_i = 0; loop(24, TSG[a_i] = 1; a_i += 1;);
+    !ts_was ? (ts_mix = 0; ts_warm = -1;);
+    ts_fast = 0;
+  );
+  ts_nbw = ts_nb;
+  srate !== ts_sr ? (
+    ts_sr = srate;
+    ts_kfa = 1 - exp(-1 / (0.0003 * srate)); ts_ksa = 1 - exp(-1 / (0.015 * srate));
+    ts_kfr = 1 - exp(-1 / (0.05 * srate)); ts_ksr = 1 - exp(-1 / (0.3 * srate));
+    ts_kg = 1 - exp(-1 / (0.0005 * srate)); ts_kmix = 1 / (0.01 * srate);
+    ts_x1 = ts_x2 = -1;
+  );
+  // starting: 50 ms for the filters and followers to settle on what's playing (the output stays dry), then the fade in
+  ts_warm < 0 ? ts_warm = floor(0.05 * srate);
+  ts_fa !== ts_x1 ? (ts_x1 = ts_fa; ts_xo(ts_fa, 0););
+  ts_fb !== ts_x2 ? (ts_x2 = ts_fb; ts_xo(ts_fb, 1););
+  TSHS[0] = floor(0.025 * srate);
+  TSHS[1] = floor(max(0.003, min(0.025, 2.5 / ts_fa)) * srate);
+  TSHS[2] = floor(max(0.003, min(0.025, 2.5 / ts_fb)) * srate);
+  ts_ng = a_groups(-1, TGA, TGN);
+  memset(TSGI, -1, 8);
+  a_g = 0; loop(ts_ng, a_c = TGA[a_g]; loop(TGN[a_g], TSGI[a_c] = a_g * 3; a_c += 1;); a_g += 1;);
+  // one linked stereo pair and nothing else: the fast path (its own state; a change of layout starts it from zero)
+  a_t = a_nchs == 2 && ts_ng == 1 && TGN[0] == 2 && TGA[0] == 0;
+  (a_t && !ts_fast) ? (
+    tl1a = tl1b = tl2a = tl2b = tl3a = tl3b = tl4a = tl4b = tl5a = tl5b = 0;
+    tr1a = tr1b = tr2a = tr2b = tr3a = tr3b = tr4a = tr4b = tr5a = tr5b = 0;
+    tf0 = ts0 = tr0 = th0 = tf1 = ts1 = tr1 = th1 = tf2 = ts2 = tr2 = th2 = 0; tg0 = tg1 = tg2 = 1;
+  );
+  ts_fast = a_t;
+  // the meters in the window: the most each band went up or down in this block
+  a_i = 0; loop(3, TSMD[a_i] = 20 * log10(TSBX[a_i] * TSBN[a_i] >= 1 ? TSBX[a_i] : TSBN[a_i]); TSBX[a_i] = 1; TSBN[a_i] = 1; a_i += 1;);
+  // no denormals in silence
+  a_i = 0; loop(80, abs(TSX[a_i]) < 0.000000000001 ? TSX[a_i] = 0; a_i += 1;);
+  a_i = 0; loop(24, TSF[a_i] < 0.000000000001 ? TSF[a_i] = 0; TSS[a_i] < 0.000000000001 ? TSS[a_i] = 0; TSL[a_i] < 0.000000000001 ? TSL[a_i] = 0; a_i += 1;);
+  ts_fast ? (
+    abs(tl1a) + abs(tl1b) + abs(tl2a) + abs(tl2b) + abs(tl3a) + abs(tl3b) + abs(tl4a) + abs(tl4b) + abs(tl5a) + abs(tl5b) +
+    abs(tr1a) + abs(tr1b) + abs(tr2a) + abs(tr2b) + abs(tr3a) + abs(tr3b) + abs(tr4a) + abs(tr4b) + abs(tr5a) + abs(tr5b) < 0.000000000001 ? (
+      tl1a = tl1b = tl2a = tl2b = tl3a = tl3b = tl4a = tl4b = tl5a = tl5b = 0;
+      tr1a = tr1b = tr2a = tr2b = tr3a = tr3b = tr4a = tr4b = tr5a = tr5b = 0;
+    );
+    tf0 < 0.000000000001 ? tf0 = 0; ts0 < 0.000000000001 ? ts0 = 0; tr0 < 0.000000000001 ? tr0 = 0;
+    tf1 < 0.000000000001 ? tf1 = 0; ts1 < 0.000000000001 ? ts1 = 0; tr1 < 0.000000000001 ? tr1 = 0;
+    tf2 < 0.000000000001 ? tf2 = 0; ts2 < 0.000000000001 ? ts2 = 0; tr2 < 0.000000000001 ? tr2 = 0;
+  );
+  a_x1a = TSXC[0]; a_x1b = TSXC[1]; a_x1c = TSXC[2]; a_x2a = TSXC[3]; a_x2b = TSXC[4]; a_x2c = TSXC[5];
+) : (
+  memset(TSMD, 0, 3);
+);
+ts_was = ts_run;
+a_fast = a_nchs == 2 && USEDA[0] && USEDA[1] && !RAMP[0] && !RAMP[1] && !a_inm && !a_kout;
+a_g0 = GLIN[0]; a_g1 = GLIN[1];
+
+@sample
+// ---- transient shaper (see @init), before everything else ----
+ts_run ? (
+  // fade in or out over 10 ms (after the 50 ms settling); once faded out, it stops (see @block)
+  ts_warm > 0 ? ts_warm -= 1 : (ts_mix = ts_on ? min(1, ts_mix + ts_kmix) : max(0, ts_mix - ts_kmix););
+  a_q = (ts_lp - ts_ld) & TSLM;
+  ts_fast ? (
+    // one linked stereo pair (the usual case): in plain variables. The bands of each channel:
+    ts_nb == 1 ? a_b00 = spl0 : (
+      a_v3 = spl0 - tl1b; a_v1 = a_x1a * tl1a + a_x1b * a_v3; a_v2 = tl1b + a_x1b * tl1a + a_x1c * a_v3; tl1a = 2 * a_v1 - tl1a; tl1b = 2 * a_v2 - tl1b; a_l1 = a_v2; a_bp = a_v1;
+      a_v3 = a_l1 - tl2b; a_v1 = a_x1a * tl2a + a_x1b * a_v3; a_v2 = tl2b + a_x1b * tl2a + a_x1c * a_v3; tl2a = 2 * a_v1 - tl2a; tl2b = 2 * a_v2 - tl2b; a_lo = a_v2;
+      a_hi = spl0 - TSK2 * a_bp - a_lo;
+      ts_nb == 2 ? (a_b00 = a_lo; a_b10 = a_hi;) : (
+        a_v3 = a_hi - tl3b; a_v1 = a_x2a * tl3a + a_x2b * a_v3; a_v2 = tl3b + a_x2b * tl3a + a_x2c * a_v3; tl3a = 2 * a_v1 - tl3a; tl3b = 2 * a_v2 - tl3b; a_l2 = a_v2; a_bp = a_v1;
+        a_v3 = a_l2 - tl4b; a_v1 = a_x2a * tl4a + a_x2b * a_v3; a_v2 = tl4b + a_x2b * tl4a + a_x2c * a_v3; tl4a = 2 * a_v1 - tl4a; tl4b = 2 * a_v2 - tl4b; a_b10 = a_v2;
+        a_b20 = a_hi - TSK2 * a_bp - a_b10;
+        a_v3 = a_lo - tl5b; a_v1 = a_x2a * tl5a + a_x2b * a_v3; a_v2 = tl5b + a_x2b * tl5a + a_x2c * a_v3; tl5a = 2 * a_v1 - tl5a; tl5b = 2 * a_v2 - tl5b; a_t = a_v2; a_bp = a_v1;
+        a_b00 = a_lo - TSK2 * a_bp;
+      );
+    );
+    ts_nb == 1 ? a_b01 = spl1 : (
+      a_v3 = spl1 - tr1b; a_v1 = a_x1a * tr1a + a_x1b * a_v3; a_v2 = tr1b + a_x1b * tr1a + a_x1c * a_v3; tr1a = 2 * a_v1 - tr1a; tr1b = 2 * a_v2 - tr1b; a_l1 = a_v2; a_bp = a_v1;
+      a_v3 = a_l1 - tr2b; a_v1 = a_x1a * tr2a + a_x1b * a_v3; a_v2 = tr2b + a_x1b * tr2a + a_x1c * a_v3; tr2a = 2 * a_v1 - tr2a; tr2b = 2 * a_v2 - tr2b; a_lo = a_v2;
+      a_hi = spl1 - TSK2 * a_bp - a_lo;
+      ts_nb == 2 ? (a_b01 = a_lo; a_b11 = a_hi;) : (
+        a_v3 = a_hi - tr3b; a_v1 = a_x2a * tr3a + a_x2b * a_v3; a_v2 = tr3b + a_x2b * tr3a + a_x2c * a_v3; tr3a = 2 * a_v1 - tr3a; tr3b = 2 * a_v2 - tr3b; a_l2 = a_v2; a_bp = a_v1;
+        a_v3 = a_l2 - tr4b; a_v1 = a_x2a * tr4a + a_x2b * a_v3; a_v2 = tr4b + a_x2b * tr4a + a_x2c * a_v3; tr4a = 2 * a_v1 - tr4a; tr4b = 2 * a_v2 - tr4b; a_b11 = a_v2;
+        a_b21 = a_hi - TSK2 * a_bp - a_b11;
+        a_v3 = a_lo - tr5b; a_v1 = a_x2a * tr5a + a_x2b * a_v3; a_v2 = tr5b + a_x2b * tr5a + a_x2c * a_v3; tr5a = 2 * a_v1 - tr5a; tr5b = 2 * a_v2 - tr5b; a_t = a_v2; a_bp = a_v1;
+        a_b01 = a_lo - TSK2 * a_bp;
+      );
+    );
+    // each band's followers (on both channels' level), then its gain
+    (TSA[0] != 0 || TSU[0] != 0) ? (
+      a_x = max(abs(a_b00), abs(a_b01));
+      a_x > tf0 ? (tf0 += ts_kfa * (a_x - tf0); th0 = TSHS[0];) : (th0 > 0 ? th0 -= 1 : tf0 += ts_kfr * (a_x - tf0));
+      ts0 += (tf0 > ts0 ? ts_ksa : ts_kfr) * (tf0 - ts0);
+      tr0 = tf0 > tr0 ? tf0 : tr0 + ts_ksr * (tf0 - tr0);
+      a_k = 1;
+      TSA[0] != 0 ? (a_e = (tf0 + 0.00001) / (ts0 + 0.00001); a_e > 1 ? a_k = min(3.981071705534972, a_e) ^ TSA[0];);
+      TSU[0] != 0 ? (a_e = (tr0 + 0.00001) / (tf0 + 0.00001); a_e > 1 ? a_k *= min(3.981071705534972, a_e) ^ TSU[0];);
+      tg0 += ts_kg * (a_k - tg0);
+      tg0 > TSBX[0] ? TSBX[0] = tg0; tg0 < TSBN[0] ? TSBN[0] = tg0;
+    ) : (tg0 += ts_kg * (1 - tg0););
+    (TSA[1] != 0 || TSU[1] != 0) ? (
+      a_x = max(abs(a_b10), abs(a_b11));
+      a_x > tf1 ? (tf1 += ts_kfa * (a_x - tf1); th1 = TSHS[1];) : (th1 > 0 ? th1 -= 1 : tf1 += ts_kfr * (a_x - tf1));
+      ts1 += (tf1 > ts1 ? ts_ksa : ts_kfr) * (tf1 - ts1);
+      tr1 = tf1 > tr1 ? tf1 : tr1 + ts_ksr * (tf1 - tr1);
+      a_k = 1;
+      TSA[1] != 0 ? (a_e = (tf1 + 0.00001) / (ts1 + 0.00001); a_e > 1 ? a_k = min(3.981071705534972, a_e) ^ TSA[1];);
+      TSU[1] != 0 ? (a_e = (tr1 + 0.00001) / (tf1 + 0.00001); a_e > 1 ? a_k *= min(3.981071705534972, a_e) ^ TSU[1];);
+      tg1 += ts_kg * (a_k - tg1);
+      tg1 > TSBX[1] ? TSBX[1] = tg1; tg1 < TSBN[1] ? TSBN[1] = tg1;
+    ) : (tg1 += ts_kg * (1 - tg1););
+    (TSA[2] != 0 || TSU[2] != 0) ? (
+      a_x = max(abs(a_b20), abs(a_b21));
+      a_x > tf2 ? (tf2 += ts_kfa * (a_x - tf2); th2 = TSHS[2];) : (th2 > 0 ? th2 -= 1 : tf2 += ts_kfr * (a_x - tf2));
+      ts2 += (tf2 > ts2 ? ts_ksa : ts_kfr) * (tf2 - ts2);
+      tr2 = tf2 > tr2 ? tf2 : tr2 + ts_ksr * (tf2 - tr2);
+      a_k = 1;
+      TSA[2] != 0 ? (a_e = (tf2 + 0.00001) / (ts2 + 0.00001); a_e > 1 ? a_k = min(3.981071705534972, a_e) ^ TSA[2];);
+      TSU[2] != 0 ? (a_e = (tr2 + 0.00001) / (tf2 + 0.00001); a_e > 1 ? a_k *= min(3.981071705534972, a_e) ^ TSU[2];);
+      tg2 += ts_kg * (a_k - tg2);
+      tg2 > TSBX[2] ? TSBX[2] = tg2; tg2 < TSBN[2] ? TSBN[2] = tg2;
+    ) : (tg2 += ts_kg * (1 - tg2););
+    // lookahead: the bands and the dry signal go through the delay; the followers above heard them first
+    a_d0 = spl0; a_d1 = spl1;
+    ts_ld > 0 ? (
+      LAB[ts_lp] = a_b00; LAB[TSLN + ts_lp] = a_b10; LAB[2 * TSLN + ts_lp] = a_b20; LAB[3 * TSLN + ts_lp] = spl0;
+      LAB[4 * TSLN + ts_lp] = a_b01; LAB[5 * TSLN + ts_lp] = a_b11; LAB[6 * TSLN + ts_lp] = a_b21; LAB[7 * TSLN + ts_lp] = spl1;
+      a_b00 = LAB[a_q]; a_b10 = LAB[TSLN + a_q]; a_b20 = LAB[2 * TSLN + a_q]; a_d0 = LAB[3 * TSLN + a_q];
+      a_b01 = LAB[4 * TSLN + a_q]; a_b11 = LAB[5 * TSLN + a_q]; a_b21 = LAB[6 * TSLN + a_q]; a_d1 = LAB[7 * TSLN + a_q];
+    );
+    a_y = a_b00 * tg0; a_z = a_b01 * tg0;
+    ts_nb > 1 ? (a_y += a_b10 * tg1; a_z += a_b11 * tg1;);
+    ts_nb > 2 ? (a_y += a_b20 * tg2; a_z += a_b21 * tg2;);
+    ts_mix >= 1 ? (spl0 = a_y; spl1 = a_z;) : (spl0 = a_d0 + ts_mix * (a_y - a_d0); spl1 = a_d1 + ts_mix * (a_z - a_d1););
+  ) : (
+    // any other layout: the bands of each channel of each group
+    a_g = 0;
+    loop(ts_ng,
+      a_a = TGA[a_g]; a_c = a_a;
+      loop(TGN[a_g],
+        a_x = spl(a_c); a_st = TSX + a_c * 10; a_tb = TSB + a_c * 3;
+        ts_nb == 1 ? a_tb[0] = a_x : (
+          a_l1 = tsvf(a_x, a_st, a_x1a, a_x1b, a_x1c); a_bp = ts_bp;
+          a_lo = tsvf(a_l1, a_st + 2, a_x1a, a_x1b, a_x1c);
+          a_hi = a_x - TSK2 * a_bp - a_lo;
+          ts_nb == 2 ? (a_tb[0] = a_lo; a_tb[1] = a_hi;) : (
+            a_l2 = tsvf(a_hi, a_st + 4, a_x2a, a_x2b, a_x2c); a_bp = ts_bp;
+            a_tb[1] = tsvf(a_l2, a_st + 6, a_x2a, a_x2b, a_x2c);
+            a_tb[2] = a_hi - TSK2 * a_bp - a_tb[1];
+            tsvf(a_lo, a_st + 8, a_x2a, a_x2b, a_x2c); a_tb[0] = a_lo - TSK2 * ts_bp;
+          );
+        );
+        a_c += 1;
+      );
+      // each band: its followers on the group's level, then its gain
+      a_b = 0;
+      loop(ts_nb,
+        a_i = a_g * 3 + a_b; a_k = 1;
+        (TSA[a_b] != 0 || TSU[a_b] != 0) ? (
+          a_x = abs(TSB[a_a * 3 + a_b]); TGN[a_g] == 2 ? (a_t = abs(TSB[a_a * 3 + 3 + a_b]); a_t > a_x ? a_x = a_t;);
+          a_f = TSF[a_i];
+          a_x > a_f ? (a_f += ts_kfa * (a_x - a_f); TSH[a_i] = TSHS[a_b];) : (TSH[a_i] > 0 ? TSH[a_i] -= 1 : a_f += ts_kfr * (a_x - a_f));
+          TSF[a_i] = a_f;
+          a_t = TSS[a_i]; a_t += (a_f > a_t ? ts_ksa : ts_kfr) * (a_f - a_t); TSS[a_i] = a_t;
+          a_r = TSL[a_i]; a_r = a_f > a_r ? a_f : a_r + ts_ksr * (a_f - a_r); TSL[a_i] = a_r;
+          TSA[a_b] != 0 ? (a_e = (a_f + 0.00001) / (a_t + 0.00001); a_e > 1 ? a_k = min(3.981071705534972, a_e) ^ TSA[a_b];);
+          TSU[a_b] != 0 ? (a_e = (a_r + 0.00001) / (a_f + 0.00001); a_e > 1 ? a_k *= min(3.981071705534972, a_e) ^ TSU[a_b];);
+        );
+        TSG[a_i] += ts_kg * (a_k - TSG[a_i]); a_k = TSG[a_i];
+        a_k > TSBX[a_b] ? TSBX[a_b] = a_k; a_k < TSBN[a_b] ? TSBN[a_b] = a_k;
+        a_b += 1;
+      );
+      a_g += 1;
+    );
+    // every channel through the delay (lookahead; none: straight through), the bands back together at their gains
+    a_c = 0;
+    loop(a_nchs,
+      a_ln = LAB + a_c * 4 * TSLN;
+      a_ln[3 * TSLN + ts_lp] = spl(a_c); a_d0 = a_ln[3 * TSLN + a_q];
+      a_i = TSGI[a_c];
+      a_i >= 0 ? (
+        a_tb = TSB + a_c * 3;
+        a_ln[ts_lp] = a_tb[0]; a_ln[TSLN + ts_lp] = a_tb[1]; a_ln[2 * TSLN + ts_lp] = a_tb[2];
+        a_y = a_ln[a_q] * TSG[a_i];
+        ts_nb > 1 ? a_y += a_ln[TSLN + a_q] * TSG[a_i + 1];
+        ts_nb > 2 ? a_y += a_ln[2 * TSLN + a_q] * TSG[a_i + 2];
+        spl(a_c) = ts_mix >= 1 ? a_y : a_d0 + ts_mix * (a_y - a_d0);
+      ) : spl(a_c) = a_d0;
+      a_c += 1;
+    );
+  );
+  ts_lp = (ts_lp + 1) & TSLM;
+) : (
+  // switched on with lookahead but nothing to shape: just the delay, so the latency stays the same
+  ts_ld > 0 ? (
+    a_q = (ts_lp - ts_ld) & TSLM; a_c = 0;
+    loop(a_nchs, a_ln = LAB + (a_c * 4 + 3) * TSLN; a_ln[ts_lp] = spl(a_c); spl(a_c) = a_ln[a_q]; a_c += 1;);
+    ts_lp = (ts_lp + 1) & TSLM;
+  );
+);
+a_fast ? (
+  // the usual case (one stereo pair, steady gain, nothing measuring): straight-line code
+  a_y0 = spl0 * a_g0; a_y1 = spl1 * a_g1;
+  spl0 = a_y0; spl1 = a_y1;
+  a_ay = abs(a_y0); a_ay > a_fp0 ? a_fp0 = a_ay;
+  a_ay = abs(a_y1); a_ay > a_fp1 ? a_fp1 = a_ay;
+  a_fe0 += a_y0 * a_y0; a_fe1 += a_y1 * a_y1;
+) : (
+a_c = 0;
+loop(a_nchs,
+  USEDA[a_c] ? (
+    a_x = spl(a_c);
+    a_inm ? (
+      // auto stage / match: the input, before the gain
+      a_ax = abs(a_x);
+      a_ax > IBP[a_c] ? IBP[a_c] = a_ax;
+      a_e = a_kin ? sqr(a_kw(a_x, KIN + a_c * 4)) : a_x * a_x;
+      IBE[a_c] += a_e;
+      a_binon ? (MBACC[a_c] += a_e; a_ax > MPK[a_c] ? MPK[a_c] = a_ax;);
+    );
+    RAMP[a_c] ? (
+      CUR[a_c] += STEP[a_c];
+      ((STEP[a_c] > 0 && CUR[a_c] >= RTGT[a_c]) || (STEP[a_c] < 0 && CUR[a_c] <= RTGT[a_c]) || STEP[a_c] === 0) ? (
+        CUR[a_c] = RTGT[a_c]; RAMP[a_c] = 0;
+      );
+      GLIN[a_c] = CUR[a_c] <= GFLOOR ? 0 : 10 ^ (CUR[a_c] / 20);
+    );
+    a_y = a_x * GLIN[a_c];
+    spl(a_c) = a_y;
+    a_ay = abs(a_y); a_ay > BPK[a_c] ? BPK[a_c] = a_ay;
+    BEN[a_c] += a_y * a_y;
+    a_kout ? BKE[a_c] += sqr(a_kw(a_y, KOUT + a_c * 4));
+  );
+  a_c += 1;
+);
+a_binon ? (
+  AU_NS += 1; AU_BPOS += 1;
+  AU_BPOS >= a_lbinlen ? (
+    AU_NB < MAXB ? (
+      a_c = 0; loop(8, MB[a_c * MAXB + AU_NB] = MBACC[a_c] / AU_BPOS; MBACC[a_c] = 0; a_c += 1;);
+      AU_NB += 1;
+    );
+    AU_BPOS = 0;
+  );
+);
+);
+// audio key: hand this plug-in's output samples to a later plug-in that asked for them (the very last thing)
+a_wr ? (gmem[a_wr0 + a_wp] = spl0; gmem[a_wr0 + AUD_R + a_wp] = spl1; a_wp = (a_wp + 1) & AUD_MASK;);
+
+@gfx 990 300
+frame_begin(900);
+
+// title: OUT: <the plug-in before this point>
+MYSLOT >= 0 ? point_title(#g_title, MYSLOT) : strcpy(#g_title, "TwoStorms Act");
+gfx_setfont(4); c_orange();
+text(#g_title, 12, 8, 640, 24, 4);
+gfx_measurestr(#g_title, g_tw, g_th); g_tw = min(640, g_tw / g_sc);
+// finale: the last Act in its chain (listed on the Gain Stage's Finales tab); Settings below can change that
+fin_compute();
+g_fin = MYSLOT >= 0 ? FIN[MYSLOT] : 0;
+g_fin ? badge("finale", 24 + g_tw, 11, 2);
+button(796, 8, 92, 24, "Settings", g_cset, 1, 0) ? g_cset = !g_cset;
+MYSLOT >= 0 ? track_name(#g_tn, MYSLOT) : strcpy(#g_tn, "");
+strcpy(#g_sub, #g_tn);
+!g_script_ok ? strcat(#g_sub, "    (helper script not running: names and chain order unavailable)");
+g_script_old ? strcat(#g_sub, "    (old helper script running: replace it with the new one)");
+gfx_setfont(3); c_dim();
+text(#g_sub, 12, 34, 876, 16, 4);
+g_cy0 = 56;
+
+// ---- settings: meters, zoom, finale, ID ----
+g_cset ? (
+  g_y = 56;
+  c_panel(); rect(6, g_y - 4, 888, 90, 1);
+  label("Peak hold", 12, g_y, 64);
+  dropdown(78, g_y, 86, 22, g_key(-1, P_HOLD), 320, 6, 1);
+  label("Meter range", 178, g_y, 80);
+  dropdown(260, g_y, 80, 22, g_key(-1, P_RANGE), 330, 6, 1);
+  label("Zoom", 356, g_y, 40);
+  dropdown(398, g_y, 80, 22, g_key(-1, P_ZOOM), 360, 6, 1);
+  g_y += 30;
+  // Finale: Auto (the last Act in the chain is the finale), Always, Never
+  label("Finale", 12, g_y, 64);
+  dropdown(78, g_y, 86, 22, g_key(-1, P_FINAL), 370, 3, 1);
+  g_fm = floor(slider(si(P_FINAL)) + 0.5);
+  g_fc = MYSLOT >= 0 ? fin_of_chain(MYSLOT) : -1;
+  g_warn = 0;
+  g_fm == FIN_NEVER ? strcpy(#g_fs, "Never on the Finales tab.") : (
+    g_fin ? (
+      fin_tail(MYSLOT) ? (
+        strcpy(#g_fs, "Finale, but plug-ins after it change the track's output."); g_warn = 1;
+      ) : (
+        strcpy(#g_fs, g_fin == 2 ? "Always on the Finales tab." : "This is the finale: the last Act in its chain.");
+      );
+    ) : (
+      g_fc >= 0 ? (point_title(#g_ft, g_fc); sprintf(#g_fs, "Not the finale: %s is.", #g_ft);) : strcpy(#g_fs, "Not the finale.");
+    );
+  );
+  gfx_setfont(3); g_warn ? c_red() : (g_fin ? c_orange() : c_dim());
+  text(#g_fs, 176, g_y, 712, 22, 4);
+  g_y += 28;
+  gfx_setfont(3); c_faint();
+  sprintf(#g_idt, "Plugin ID %d", MYID); text(#g_idt, 12, g_y, 876, 16, 4);
+  g_cy0 = g_y + 24;
+);
+
+// ---- transient shaper: off by default, and nothing runs while it is off. A row for the switch, the crossovers (a
+// tick box in front of each: ticked, it splits there and its band's row shows) and lookahead, then one row per band:
+// its range, Attack, Sustain and what it is doing now ----
+g_y = g_cy0;
+g_tson = slider(si(P_TSON)) >= 0.5;
+g_nb = 1 + (slider(si(P_TSXO1)) >= 0.5) + (slider(si(P_TSXO2)) >= 0.5);
+c_panel(); rect(6, g_y - 4, 888, 30 + g_nb * 26, 1);
+button(12, g_y, 150, 22, g_tson ? "Transient shaper: on" : "Transient shaper: off", g_tson, 1, 0) ? g_kset(g_key(-1, P_TSON), !g_tson, 1);
+label("Crossovers", 176, g_y, 76);
+g_c = 0;
+loop(2,
+  g_on = slider(si(P_TSXO1 + g_c)) >= 0.5;
+  checkbox(256 + g_c * 112, g_y + 4, g_on, 1) ? g_kset(g_key(-1, P_TSXO1 + g_c), !g_on, 1);
+  ts_ffmt(#g_tsv, slider(si(P_TSX1 + g_c)));
+  valbox(276 + g_c * 112, g_y + 1, 84, 20, g_key(-1, P_TSX1 + g_c), 0.004, 0.0004, 5, #g_tsv, g_on);
+  g_c += 1;
+);
+g_la = slider(si(P_TSLA)) >= 0.5;
+button(712, g_y, 96, 22, "Lookahead", g_la, 1, 0) ? g_kset(g_key(-1, P_TSLA), !g_la, 1);
+sprintf(#g_tsv, "%.1f ms", slider(si(P_TSLAMS)));
+valbox(812, g_y + 1, 76, 20, g_key(-1, P_TSLAMS), 0.02, 0.002, 6, #g_tsv, g_la);
+g_y += 28;
+// the bands, lowest first (the crossovers in order, whichever box holds which)
+g_x1 = slider(si(P_TSX1)); g_x2 = slider(si(P_TSX2));
+g_fa = g_nb == 3 ? min(g_x1, g_x2) : (slider(si(P_TSXO1)) >= 0.5 ? g_x1 : g_x2);
+g_fb = max(max(g_x1, g_x2), g_fa * 1.26);
+ts_ffmt(#g_tf1, g_fa); ts_ffmt(#g_tf2, g_fb);
+g_b = 0;
+loop(g_nb,
+  g_nb == 1 ? strcpy(#g_tbl, "Full band") : (
+    g_b == 0 ? sprintf(#g_tbl, "Low  < %s", #g_tf1) : (
+      g_b == g_nb - 1 ? sprintf(#g_tbl, "High  > %s", g_nb == 2 ? #g_tf1 : #g_tf2) : sprintf(#g_tbl, "Mid  %s - %s", #g_tf1, #g_tf2)));
+  gfx_setfont(3); g_tson ? c_dim() : c_faint(); text(#g_tbl, 14, g_y, 150, 22, 4);
+  tsctl("Attack", 176, g_y, P_TSATT + 2 * g_b, g_tson);
+  tsctl("Sustain", 470, g_y, P_TSSUS + 2 * g_b, g_tson);
+  // what the band is doing now: the most it went up or down lately
+  gfx_setfont(3); c_dim(); text("now", 766, g_y, 30, 22, 4);
+  c_well(); rect(796, g_y + 4, 92, 14, 1);
+  g_tsd = (g_tson && g_live(MYSLOT, g_now)) ? max(-12, min(12, TSMD[g_b])) : 0;
+  c_orange(); g_tsd >= 0 ? rect(842, g_y + 5, g_tsd / 12 * 45, 12, 1) : rect(842 + g_tsd / 12 * 45, g_y + 5, -g_tsd / 12 * 45, 12, 1);
+  setc(0.36, 0.34, 0.33); rect(842, g_y + 4, 1 / g_sc, 14, 1);
+  c_border(); rect(796, g_y + 4, 92, 14, 0);
+  g_y += 26;
+  g_b += 1;
+);
+g_y += 8;
+
+// ---- output: laid out like this Act's card in the Gain Stage (the drive link where Auto all's tick and name are) ----
+g_live_me = MYSLOT >= 0 && g_live(MYSLOT, g_now);
+g_ng = g_groups(-1, GGA, GGN);
+g_am = auto_mode(-1);
+g_tgt = aim_tick(-1);
+g_ch2 = 38 + max(1, g_ng) * 26;
+c_card(); rect(6, g_y, 888, g_ch2, 1);
+setc(0.20, 0.19, 0.18); rect(6, g_y, 888, g_ch2, 0);
+drive_label(#g_dlb, -1);
+// drive link: the engage box switches it off without forgetting it
+g_dl = slider(si(P_DRIVE)) >= DRIVE_PARAM; g_don = slider(si(P_DRIVEON)) >= 0.5;
+checkbox(16, g_y + 10, g_don && g_dl, g_dl) ? g_kset(g_key(-1, P_DRIVEON), !g_don, 1);
+button(38, g_y + 6, 280, 22, #g_dlb, g_dl && g_don, MYSLOT >= 0, 1) ? drive_menu(-1, 38, g_y + 28);
+// ... | mode | value | channels | Peak/RMS/LUFS | time | Auto
+button(324, g_y + 6, 28, 22, "...", 0, 1, 0) ? act_menu(324, g_y + 28);
+mode_ctl(356, g_y + 6, 96, -1, 1, 1);
+value_ctl(456, g_y + 6, 130, -1, 1);
+(g_am != 0 && g_ng == 1) ? src_ctl(590, g_y + 6, 76, 22, -1, GGA[0], 1, 1);
+dropdown(666, g_y + 6, 80, 22, g_key(-1, P_MEAS), 310, 3, 1);
+auto_time_box(750, g_y + 6, 70, 22, -1, 1);
+button(826, g_y + 6, 62, 22, auto_label(-1), auto_busy(-1), MYSLOT >= 0, 0) ? auto_click(-1);
+// one row per gain group: meters, (source channels for Match / Reference when there are several groups), readouts, gain
+g_gy = g_y + 36;
+g_mw = (g_am != 0 && g_ng > 1) ? 316 : 410;
+g_g = 0;
+loop(g_ng,
+  g_a = GGA[g_g]; g_n = GGN[g_g];
+  g_n == 2 ? sprintf(#g_lb, "%d-%d", g_a + 1, g_a + 2) : sprintf(#g_lb, "%d", g_a + 1);
+  gfx_setfont(3); c_dim(); text(#g_lb, 16, g_gy, 36, 20, 4);
+  g_n == 2 ? (
+    meter(54, g_gy, g_mw, 9, MYSLOT, g_a, g_tgt, g_live_me);
+    meter(54, g_gy + 11, g_mw, 9, MYSLOT, g_a + 1, g_tgt, g_live_me);
+  ) : (
+    meter(54, g_gy, g_mw, 20, MYSLOT, g_a, g_tgt, g_live_me);
+  );
+  (g_am != 0 && g_ng > 1) ? src_ctl(376, g_gy, 86, 20, -1, g_a, 1, 1);
+  readouts(472, g_gy, MYSLOT, g_a, g_n, g_live_me);
+  gain_ctl(630, g_gy, 168, g_key(-1, P_GAIN + g_a), 1);
+  g_gy += 26;
+  g_g += 1;
+);
+g_ng == 0 ? (
+  gfx_setfont(1); c_dim();
+  text("Every channel is switched off (see ...), so everything passes through untouched.", 16, g_gy, 860, 20, 4);
+);
+g_y += g_ch2 + 10;
+gfx_setfont(3); c_faint();
+text("Auto modes: Target = output hits Target. Reference = equals the reference. Match = equals the previous plug-in in the chain.", 12, g_y, 876, 14, 4);
+text("Drive link: when this Gain changes, the linked Act or plug-in parameter moves the opposite way. Channels, links and the finale: the ... menu.", 12, g_y + 14, 876, 14, 4);
+g_y += 34;
+frame_end(g_y);
